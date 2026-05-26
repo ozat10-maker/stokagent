@@ -1,3 +1,84 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import io
+import time
+from google import genai
+from google.genai import types
+
+# הגדרת תצורת דף רחב למערכת האנליסטים
+st.set_page_config(page_title="Macro AI Alpha Core - מנוע איתור מניות", layout="wide")
+
+st.title("🎯 Macro AI Alpha Core")
+st.subheader("מערכת סוכנים אוטומטית לסריקת ענפים ואיתור השקעות (Powered by Gemini 2.5 Flash)")
+
+# תפריט צד: הגדרות מפתח ופרופיל מנהל השקעות
+st.sidebar.header("⚙️ הגדרות מערכת וסיכון")
+
+# ניהול מפתח API של Gemini
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    st.sidebar.success("מפתח API נטען אוטומטית ✅")
+else:
+    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
+
+# בחירת פרופיל סיכון
+risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
+
+# הגדרת ענפים ומניות מובילות כברירת מחדל לאוטומציה
+SECTOR_MAP = {
+    "Technology & AI Semiconductors": ["NVDA", "TSM", "AMD", "ASML"],
+    "Energy & Global Infrastructure": ["XOM", "CVX", "SHEL", "NextEra"],
+    "Commodities & Global Shipping": ["VALE", "CAT", "ZIM", "BHP"],
+    "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
+}
+
+# 1. שלב חובה: בחירת ענף
+selected_sector = st.selectbox(
+    "1. בחר ענף/סקטור לסריקה מקיפה:", 
+    list(SECTOR_MAP.keys())
+)
+
+# 2. שלב אופציונלי: התעמקות במנייה ספציפית
+st.write("---")
+st.markdown("### 🔍 התעמקות במנייה ספציפית (אופציונלי)")
+use_specific_stock = st.checkbox("אני רוצה לבחור מנייה ספציפית לניתוח בתוך הענף")
+
+target_ticker = None
+if use_specific_stock:
+    ticker_options = SECTOR_MAP[selected_sector]
+    selected_ticker = st.selectbox(f"בחר מנייה מתוך ענף {selected_sector}:", ticker_options)
+    custom_ticker = st.text_input("או הזן סימול מנייה אחרת ידנית (למשל: AAPL, MSFT):").upper().strip()
+    target_ticker = custom_ticker if custom_ticker else selected_ticker
+
+# פונקציית עזר ליצירת גרף טכני אוטומטי לענף/מנייה
+def generate_sector_chart(tickers):
+    try:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        for ticker in tickers:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="6m")
+            if not hist.empty:
+                # נרמול המחיר ל-100 כדי להשוות אחוזים
+                normalized_price = (hist['Close'] / hist['Close'].iloc[0]) * 100
+                ax.plot(hist.index, normalized_price, label=ticker)
+        
+        ax.set_title("Sector Peer Comparison (Last 6 Months Normalized to 100)")
+        ax.set_ylabel("Normalized Performance (%)")
+        ax.legend()
+        ax.grid(True)
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        img_bytes = buf.getvalue()
+        plt.close(fig)
+        return img_bytes
+    except:
+        return None
+
 # --- הפעלת מנוע הסוכנים האוטומטי עם מנגנון הגנה מפני עומס ---
 st.write("---")
 if st.button("🚀 הפעל סוכן מחקר אוטומטי", type="primary"):
@@ -60,23 +141,22 @@ if st.button("🚀 הפעל סוכן מחקר אוטומטי", type="primary"):
                         )
                         break  # הצלחנו! יוצאים מהלולאה
                     except Exception as exc:
-                        # אם זו שגיאת עומס ונותרו ניסיונות, נמתין ונסה שוב
                         if ("503" in str(exc) or "429" in str(exc)) and attempt < max_retries - 1:
-                            wait_time = (attempt + 1) * 5  # המתנה הולכת וגדלה (5, 10 שניות)
+                            wait_time = (attempt + 1) * 5
                             st.caption(f"⚠️ השרת עמוס זמנית (503). מבצע ניסיון חוזר {attempt + 2}/{max_retries} בעוד {wait_time} שניות...")
                             time.sleep(wait_time)
                         else:
-                            raise exc  # אם זו שגיאה אחרת או שנגמרו הניסיונות, זרוק את השגיאה החוצה
+                            raise exc
                 
-                # הצגת דוח המודיעין הפיננסי האוטומטי
+                # הצגת דוח המודיעין הפיננסי האוחזר
                 if response:
                     st.write("---")
                     st.header("📋 דוח מודיעין פיננסי עצמאי ומבוסס חיפוש רשת")
                     st.markdown(response.text)
                     
                     # הצגת מקורות המידע מהרשת
-                    if response.candidates and response.candidates[0].grounding_metadata:
-                        metadata = response.candidates[0].grounding_metadata
+                    if response.candidates and response.candidates.grounding_metadata:
+                        metadata = response.candidates.grounding_metadata
                         if metadata.grounding_chunks:
                             with st.expander("🔗 צפה במקורות ואתרי החדשות מהם הסוכן שאב מידע:"):
                                 for chunk in metadata.grounding_chunks:
