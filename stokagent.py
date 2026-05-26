@@ -1,10 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
-import numpy as np
 import io
 import time
 from google import genai
@@ -13,11 +11,8 @@ from google.genai import types
 # הגדרת תצורת דף רחב למערכת האנליסטים
 st.set_page_config(page_title="Macro AI Alpha Core - מנוע איתור מניות", layout="wide")
 
-# אתחול משתני State גלובליים
-if "current_view" not in st.session_state:
-    st.session_state.current_view = "dashboard"
-if "analysis_results" not in st.session_state:
-    st.session_state.analysis_results = None
+st.title("🎯 Macro AI Alpha Core")
+st.subheader("מערכת סוכנים אוטומטית לסריקת ענפים ואיתור השקעות (Powered by Gemini 2.5 Flash)")
 
 # תפריט צד: הגדרות מפתח ופרופיל מנהל השקעות
 st.sidebar.header("⚙️ הגדרות מערכת וסיכון")
@@ -27,168 +22,134 @@ if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("מפתח API נטען אוטומטית ✅")
 else:
-    api_key = st.sidebar.text_input("הזן מפתח API של Gemini Pro:", type="password")
+    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
 
-# הגדרת פרופיל סיכון ותחומי עניין
+# בחירת פרופיל סיכון
 risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
-selected_sector = st.sidebar.selectbox(
-    "תחום עניין לסריקה וחקר:", 
-    ["Semiconductors & AI Hardware", "Energy & Global Infrastructure", "Commodities & Shipping", "Biotech & Healthcare"]
+
+# --- הגדרת ענפים ומניות מובילות כברירת מחדל לאוטומציה ---
+SECTOR_MAP = {
+    "Technology & AI Semiconductors": ["NVDA", "TSM", "AMD", "ASML"],
+    "Energy & Global Infrastructure": ["XOM", "CVX", "SHEL", "NextEra"],
+    "Commodities & Global Shipping": ["VALE", "CAT", "ZIM", "BHP"],
+    "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
+}
+
+# 1. שלב חובה: בחירת ענף
+selected_sector = st.selectbox(
+    "1. בחר ענף/סקטור לסריקה מקיפה:", 
+    list(SECTOR_MAP.keys())
 )
 
-# עזרי עקיפת צנזורה ותרגום
-report_lang = st.sidebar.radio("שפת הפקת האבחנות:", ["עברית (Hebrew)", "אנגלית (English)"])
+# 2. שלב אופציונלי: התעמקות במנייה ספציפית
+st.write("---")
+st.markdown("### 🔍 התעמקות במנייה ספציפית (אופציונלי)")
+use_specific_stock = st.checkbox("אני רוצה לבחור מנייה ספציפית לניתוח בתוך הענף")
 
-# --- פונקציות ליבה עצמאיות למשיכת נתונים ובניית גרפים ---
+target_ticker = None
+if use_specific_stock:
+    ticker_options = SECTOR_MAP[selected_sector]
+    selected_ticker = st.selectbox(f"בחר מנייה מתוך ענף {selected_sector}:", ticker_options)
+    custom_ticker = st.text_input("או הזן סימול מנייה אחרת ידנית (למשל: AAPL, MSFT):").upper().strip()
+    target_ticker = custom_ticker if custom_ticker else selected_ticker
 
-def generate_and_analyze_technical_chart(ticker_str):
-    """משיכת נתוני מחיר, בניית גרף טכני עצמאי והמרתו לביטים עבור ה-AI"""
+# --- פונקציית עזר ליצירת גרף טכני אוטומטי לענף/מנייה ---
+def generate_sector_chart(tickers):
+    """מייצרת גרף ביצועים משווה עבור המניות המובילות בסקטור"""
     try:
-        stock = yf.Ticker(ticker_str)
-        hist = stock.history(period="1y")
-        if hist.empty: return None
+        fig, ax = plt.subplots(figsize=(10, 4))
+        for ticker in tickers:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="6m")
+            if not hist.empty:
+                # נרמול המחיר ל-100 כדי להשוות אחוזים
+                normalized_price = (hist['Close'] / hist['Close'].iloc[0]) * 100
+                ax.plot(hist.index, normalized_price, label=ticker)
         
-        # חישוב אינדיקטורים טכניים עצמאיים
-        hist['MA50'] = hist['Close'].rolling(window=50).mean()
-        hist['MA200'] = hist['Close'].rolling(window=200).mean()
-        
-        # יצירת תרשים עצמאי באמצעות Matplotlib (במערך זיכרון ללא שמירה בדיסק)
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(hist.index, hist['Close'], label='Price', color='black')
-        ax.plot(hist.index, hist['MA50'], label='MA 50', color='blue', linestyle='--')
-        ax.plot(hist.index, hist['MA200'], label='MA 200', color='red', linestyle='-')
-        ax.set_title(f"{ticker_str} Technical Trends & Moving Averages")
+        ax.set_title("Sector Peer Comparison (Last 6 Months Normalized to 100)")
+        ax.set_ylabel("Normalized Performance (%)")
         ax.legend()
         ax.grid(True)
         
-        # שמירת הגרף בזיכרון כקובץ PNG (על מנת להזין אותו ישירות ל-Gemini Vision)
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight')
         buf.seek(0)
-        image_bytes = buf.getvalue()
+        img_bytes = buf.getvalue()
         plt.close(fig)
-        
-        return image_bytes, hist
+        return img_bytes
     except:
-        return None, None
+        return None
 
-def fetch_financial_reports_data(ticker_str):
-    """משיכת נתוני דוחות כספיים אחרונים (פונדמנטלי)"""
-    try:
-        stock = yf.Ticker(ticker_str)
-        # משיכת דוחות רווח והפסד רבעוניים
-        quarterly_financials = stock.quarterly_financials
-        # מידע כללי
-        info = stock.info
-        return quarterly_financials, info
-    except:
-        return None, None
-
-# --- המסך הראשי של המערכת ---
-st.title("🎯 Macro AI Alpha Core")
-st.subheader("מערכת מולטי-מודאלית מבוססת Gemini Pro לאיתור השקעות אלטרנטיביות")
-
-# מנוע החיפוש הראשי באפליקציה
-col_input, col_action = st.columns([4, 1])
-target_ticker = col_input.text_input("הזן סימול מניית מטרה לבדיקת התלכדות תובנות (למשל: NVDA, XOM, TSMC):", "NVDA").upper().strip()
-
-if col_action.button("הפעל מנוע אבחון מקיף", type="primary"):
+# --- הפעלת מנוע הסוכנים האוטומטי ---
+st.write("---")
+if st.button("🚀 הפעל סוכן מחקר אוטומטי", type="primary"):
     if not api_key:
-        st.warning("אנא הזן מפתח API בתפריט הצד")
+        st.warning("אנא הזן מפתח API בתפריט הצד על מנת להפעיל את הסוכן.")
     else:
-        with st.spinner("המנוע מפעיל רדארים וסורק מקורות מידע אלטרנטיביים..."):
-            
-            # 1. משיכת נתונים ובניית גרפים עצמאית
-            img_bytes, price_hist = generate_and_analyze_technical_chart(target_ticker)
-            financials, stock_info = fetch_financial_reports_data(target_ticker)
-            
-            if price_hist is not None:
-                # מדמה העלאת קבצים אלטרנטיביים לצורך ה-MVP (במציאות המשתמש יעלה או נמשוך מ-API)
-                st.session_state.analysis_results = {
-                    "ticker": target_ticker,
-                    "img_bytes": img_bytes,
-                    "financials": financials.to_string() if financials is not None else "No financial statements data",
-                    "info": stock_info
-                }
-            else:
-                st.error("לא ניתן היה למשוך נתוני שוק עבור סימול זה.")
-
-# הצגת תוצאות הניתוח וממשק הכלים האלטרנטיביים
-if st.session_state.analysis_results:
-    res = st.session_state.analysis_results
-    st.write("---")
-    st.header(f"🔍 ממצאים ואבחנות עבור מניית {res['ticker']}")
-    
-    # הצגת הגרף שהמערכת יצרה עצמאית
-    st.subheader("📊 גרף מגמה טכני (נוצר עצמאית על ידי המנוע)")
-    st.image(res['img_bytes'], use_container_width=True)
-    
-    # -------------------------------------------------------------
-    # ממשק קלט לנתונים אלטרנטיביים (לוויין, מגזינים, פטנטים)
-    # -------------------------------------------------------------
-    st.write("---")
-    st.subheader("🛰️ הזנת נתונים אלטרנטיביים ומולטי-מודאליים (רובד ויזואלי וגיאופוליטי)")
-    
-    col_v1, col_v2 = st.columns(2)
-    uploaded_satellite = col_v1.file_saver = col_v1.file_uploader("העלה תמונת לוויין / תשתיות (נמלים, מיכלי נפט, חניונים):", type=["png", "jpg", "jpeg"])
-    uploaded_magazine = col_v2.file_uploader("העלה צילום גרף/ניתוח ממגזין כלכלי (Bloomberg, Economist):", type=["png", "jpg", "jpeg"])
-    
-    geopolitical_news = st.text_area("הזן כותרות או טקסט חדשותי ממדינות מקומיות (עקיפת צנזורה):", 
-                                     value="דיווחים מקומיים בתקשורת הזרה על מגבלות ייצוא חדשות ומתיחות בנמלי המסחר המרכזיים.")
-    
-    if st.button("🚀 הרץ ניתוח Gemini Pro משולב (ציון התלכדות תובנות)", type="primary"):
-        with st.spinner("מנוע Gemini 2.5 Pro מנתח קבצי תמונה, דוחות כספיים וחדשות במקביל..."):
+        with st.spinner(f"הסוכן יוצא לרשת, מחפש חדשות ומנתח נתונים עבור סקטור {selected_sector}..."):
             try:
-                # הגדרת לקוח ג'נאי
+                # אתחול הלקוח של Gemini
                 client = genai.Client(api_key=api_key)
                 
-                # בניית התוכן המולטי-מודאלי למודל
+                # 1. יצירת גרף ויזואלי עצמאי של נתוני השוק בשבילו
+                tickers_to_chart = [target_ticker] if target_ticker else SECTOR_MAP[selected_sector]
+                img_bytes = generate_sector_chart(tickers_to_chart)
+                
+                # 2. הכנת חלקי התוכן (קודם כל התרשים הויזואלי שהמערכת יצרה)
                 contents = []
+                if img_bytes:
+                    contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+                    st.subheader("📊 ביצועי שוק נוכחיים (נוצר אוטומטית על ידי המערכת)")
+                    st.image(img_bytes, use_container_width=True)
                 
-                # 1. הוספת הגרף הטכני שהמערכת יצרה עצמאית
-                contents.append(types.Part.from_bytes(data=res['img_bytes'], mime_type="image/png"))
-                
-                # 2. הוספת תמונת הלוויין במידה והועלתה
-                if uploaded_satellite:
-                    contents.append(types.Part.from_bytes(data=uploaded_satellite.getvalue(), mime_type="image/png"))
-                
-                # 3. הוספת גרף המגזין במידה והועלה
-                if uploaded_magazine:
-                    contents.append(types.Part.from_bytes(data=uploaded_magazine.getvalue(), mime_type="image/png"))
-                
-                # 4. בניית פרומפט ההנחיה המתוחכם (כולל כל 5 האספקטים וההוספות החדשות)
-                lang_rule = "Respond ONLY in Hebrew." if report_lang == "עברית (Hebrew)" else "Respond ONLY in English."
+                # 3. בניית הנחיית הסוכן (פרומפט) והפעלת חיפוש בגוגל (Search Grounding)
+                focus_scope = f"המנייה הספציפית: {target_ticker}" if target_ticker else f"כלל הענף והחברות המובילות בו: {', '.join(SECTOR_MAP[selected_sector])}"
                 
                 prompt_text = f"""
-                You are a senior investment manager and multi-disciplinary macro analyst.
-                Analyze the following data points for the stock {res['ticker']} and generate an Alpha Convergence Report:
+                You are an autonomous AI macro-research analyst. Your goal is to identify investment opportunities in the sector: '{selected_sector}'.
+                Focus Scope: {focus_scope}
+                Target Risk Profile: {risk_profile}
                 
-                1. **Technical Graph (Attached Image 1):** Analyze the trends and moving averages generated by the engine.
-                2. **Fundamental & Financial Reports:** Examine these recent quarterly figures:\n{res['financials']}\nAnalyze short/long term behavior.
-                3. **Alternative Satellite Imagery (If attached):** Look for supply chain anomalies, oil levels, or port activity.
-                4. **Financial Media Chart (If attached):** Interpret hidden chart insights from premium magazines.
-                5. **Geopolitical Radar:** Evaluate the following raw text for hidden censorship or macro risks:\n{geopolitical_news}
+                Perform the following autonomous research using Google Search to gather alternative and recent data from premium global finance and news sources:
                 
-                **Incorporate Advanced Metrics:**
-                - **Patent Pipeline Tracker:** Assess how future innovations might impact this stock's moat based on the sector ({selected_sector}).
-                - **Alternative Sentiment:** Cross-reference with macro sentiment.
-                - **Insight Convergence Score:** Provide a final mathematical/justified score (0-100) indicating how aligned all 5 indicators are for an investment.
+                1. **Global & Regional News:** Search for uncensored regional news, export bans, or logistical challenges related to this sector.
+                2. **Alternative Insights & Satellite/Supply Chain Indicators:** Look for recent reports about port congestions, factory inventory gluts, aircraft movement trends, or satellite-tracked oil/commodity storages relevant to this industry.
+                3. **Patent & Innovation Pipeline:** Scan recent news for breaking patents, regulatory updates (FDA approvals, chips act funding, etc.).
+                4. **Chart Interpretation:** If an image is attached, review the trends shown.
                 
-                {lang_rule}
+                Synthesize all findings and provide:
+                - Top Market Insights (What is happening right now behind the scenes).
+                - An Alpha Convergence Score (0-100) assessing the alignment of technical, fundamental, and geopolitical indicators.
+                - Actionable recommendations for an investment manager.
+                
+                Respond strictly and entirely in Hebrew.
                 """
                 contents.append(prompt_text)
                 
-                # הפעלת מודל הפרו החזק
+                # הפעלת מודל ה-Flash עם רכיב החיפוש המובנה של גוגל (Google Search Tool)
                 response = client.models.generate_content(
-                    model='gemini-2.5-pro',
+                    model='gemini-2.5-flash',
                     contents=contents,
-                    config=types.GenerateContentConfig(temperature=0.2)
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        # הפעלת סוכן החיפוש ברשת בזמן אמת!
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
+                    )
                 )
                 
-                # הצגת דוח האנליסט המורחב
+                # הצגת דוח המודיעין הפיננסי האוטומטי
                 st.write("---")
-                st.subheader("📋 דוח אבחנות מודיעין פיננסי משולב")
+                st.header("📋 דוח מודיעין פיננסי עצמאי ומבוסס חיפוש רשת")
                 st.markdown(response.text)
                 
+                # אופציונלי: הצגת מקורות המידע בהם הסוכן השתמש מהרשת
+                if response.candidates and response.candidates[0].grounding_metadata:
+                    metadata = response.candidates[0].grounding_metadata
+                    if metadata.grounding_chunks:
+                        with st.expander("🔗 צפה במקורות ואתרי החדשות מהם הסוכן שאב מידע:"):
+                            for chunk in metadata.grounding_chunks:
+                                if chunk.web:
+                                    st.write(f"- [{chunk.web.title}]({chunk.web.uri})")
+                                    
             except Exception as e:
-                st.error(f"שגיאה בהפעלת מנוע הניתוח של Gemini Pro: {str(e)}")
+                st.error(f"שגיאה בהפעלת סוכן המחקר: {str(e)}")
