@@ -8,10 +8,10 @@ from google import genai
 from google.genai import types
 
 # הגדרת תצורת דף רחב למערכת האנליסטים
-st.set_page_config(page_title="Macro AI Alpha Core - מנוע חסין חסימות", layout="wide")
+st.set_page_config(page_title="Macro AI Alpha Core - מנוע חסכוני", layout="wide")
 
-st.title("🎯 Macro AI Alpha Core (v5 - מנוע מנוהל קצב)")
-st.subheader("מערכת סוכנים מנוהלת קצב (Rate-Controlled) למניעת חסימות 429 במסלול החינמי")
+st.title("🎯 Macro AI Alpha Core (v6 - מנוע אחוד וחסכוני)")
+st.subheader("מנוע מחקר מותאם למסלול החינמי - צריכת קריאה בודדת (1 Call) לחיסכון במכסה היומית")
 
 # תפריט צד: הגדרות מפתח ופרופיל מנהל השקעות
 st.sidebar.header("⚙️ הגדרות מערכת וסיכון")
@@ -76,36 +76,13 @@ def generate_market_chart(tickers):
     except Exception as e:
         return None
 
-# פונקציה להפעלת סוכן יחיד עם ניהול קצב קפדני
-def run_stable_agent(client, prompt, agent_name):
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    tools=[types.Tool(google_search=types.GoogleSearch())]
-                )
-            )
-            return response.text
-        except Exception as exc:
-            if "429" in str(exc) or "503" in str(exc):
-                # אם נחסמנו, נמתין זמן ארוך יותר ונסה שוב
-                wait = (attempt + 1) * 10
-                time.sleep(wait)
-            else:
-                return f"סוכן {agent_name} נתקל בשגיאה: {str(exc)}"
-    return f"סוכן {agent_name} לא הצליח לקבל מענה בשל מגבלות קצב של ה-API החינמי."
-
-# --- הפעלת מנוע הסוכנים המנוהל ---
+# --- הפעלת מנוע הסוכנים המאוחד ---
 st.write("---")
-if st.button("🚀 הפעל רשת סוכנים מנוהלת קצב", type="primary"):
+if st.button("🚀 הפעל מחקר שוק מאוחד (צורך קריאה בודדת)", type="primary"):
     if not api_key:
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
-        # הצגת הגרף
+        # הצגת הגרף (מתבצע מקומית בשרת של Streamlit ולא צורך מכסת API)
         st.markdown("#### 📊 שלב 0: הפקת נתוני שוק ויזואליים...")
         tickers_to_chart = target_ticker if target_ticker else SECTOR_MAP[selected_sector]
         img_bytes = generate_market_chart(tickers_to_chart)
@@ -113,81 +90,56 @@ if st.button("🚀 הפעל רשת סוכנים מנוהלת קצב", type="prim
             st.image(img_bytes, use_container_width=True)
             
         focus_scope = f"המנייה {target_ticker}" if target_ticker else f"הענף {selected_sector}"
-        client = genai.Client(api_key=api_key)
         
-        # שלב 1: סוכן חדשות
-        with st.spinner("📰 סוכן חדשות ומאקרו אוסף נתונים מהרשת..."):
-            p1 = f"Search Google for the latest premium financial news and recent market events regarding {focus_scope}. Provide a summary of the top 3 macro highlights. Respond in Hebrew."
-            res_news = run_stable_agent(client, p1, "חדשות ומאקרו")
-            
-        # ⏱️ השהיה קריטית למניעת חסימת קצב בקשות (Rate Limit)
-        st.caption("⏱️ מנוע ניהול הקצב ממתין 6 שניות כדי למנוע חסימת API רשת...")
-        time.sleep(6)
+        # בניית פרומפט מאוחד שמבצע הכל בפעימה אחת
+        prompt_unified = f"""
+        You are an expert investment manager and macro researcher. 
+        Your task is to generate a comprehensive Alpha Convergence Report for {focus_scope} based on a target risk profile of '{risk_profile}'.
         
-        # שלב 2: סוכן מודיעין אלטרנטיבי
-        with st.spinner("🛰️ סוכן מודיעין אלטרנטיבי סורק נתוני לוגיסטיקה ולוויין..."):
-            p2 = f"Search Google for alternative data, satellite tracking reports, port congestions, shipping delays, or factory inventory levels relevant to {focus_scope}. Summarize critical anomalies. Respond in Hebrew."
-            res_alt = run_stable_agent(client, p2, "מודיעין אלטרנטיבי")
-            
-        # ⏱️ השהיה קריטית נוספת
-        st.caption("⏱️ מנוע ניהול הקצב ממתין 6 שניות נוספות...")
-        time.sleep(6)
+        Using Google Search, explore the web and compile data across these three specific categories:
+        1. **Global Market News:** Summary of recent major geopolitical developments, trade constraints, or macro highlights impacting this asset class.
+        2. **Alternative Data & Logistics:** Look for tracking reports regarding shipping bottlenecks, production gluts, or factory/port activity anomalies.
+        3. **Innovation & Patents:** Search for recent patent filings, regulatory approvals, or technological breakthroughs.
         
-        # שלב 3: סוכן קניין רוחני
-        with st.spinner("💡 סוכן קניין ורגולציה סורק פטנטים ואישורים..."):
-            p3 = f"Search Google for recent patent filings, R&D breakthroughs, subsidies, government grants, or critical regulatory updates regarding {focus_scope}. Respond in Hebrew."
-            res_tech = run_stable_agent(client, p3, "קניין ורגולציה")
-
-        # הצגת הממצאים במבנה של 3 עמודות
-        st.write("---")
-        st.success("✅ כל סוכני השטח סיימו את איסוף המידע המבוקר!")
+        Synthesize all of these findings into a polished, definitive investment report in Hebrew.
+        The report must include:
+        - **ממצאים מרכזיים מהשטח (מודיעין פיננסי משולב):** A deep synthesis of the news, alternative metrics, and tech breakthroughs.
+        - **מדד התלכדות תובנות (Alpha Convergence Score):** A numerical score from 0-100 with strict logical justification.
+        - **המלצה אסטרטגית מנומקת:** Clear buy/sell/hold tactical guidance tailored specifically to a {risk_profile} investment strategy.
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            with st.container(border=True):
-                st.markdown("### 📰 סוכן חדשות ומאקרו")
-                st.write(res_news)
-        with col2:
-            with st.container(border=True):
-                st.markdown("### 🛰️ סוכן מודיעין אלטרנטיבי")
-                st.write(res_alt)
-        with col3:
-            with st.container(border=True):
-                st.markdown("### 💡 סוכן קניין ורגולציה")
-                st.write(res_tech)
-                
-        # ⏱️ השהיה אחרונה לפני הסינתזה
-        st.caption("⏱️ ממתינים 6 שניות אחרונות לפני הרצת מנוע הסינתזה...")
-        time.sleep(6)
+        Respond strictly and entirely in Hebrew.
+        """
         
-        # -------------------------------------------------------------
-        # שלב סינתזה סופית
-        # -------------------------------------------------------------
-        with st.spinner("🧠 מנוע סינתזה מגבש כעת את דוח ה-Alpha המשולב..."):
-            prompt_final = f"""
-            You are a senior investment manager. Review the following pieces of raw research gathered by our sub-agents for {focus_scope} (Risk Profile: {risk_profile}):
-            
-            [Market News Info]: {res_news}
-            [Alternative & Supply Chain Info]: {res_alt}
-            [Innovation & Patents Info]: {res_tech}
-            
-            Compile a final, polished comprehensive Alpha Convergence Report.
-            Include:
-            1. Executive Summary (The real story behind the scenes).
-            2. Alpha Convergence Score (0-100) with strict mathematical justification based on how well the inputs align.
-            3. Clear Buy/Sell/Hold strategic recommendations tailored to the {risk_profile} profile.
-            
-            Respond strictly and entirely in Hebrew.
-            """
-            
+        with st.spinner("🧠 סוכן המאקרו המאוחד מבצע חיפוש רשת ומגבש את הדוח הסופי (זה עשוי לקחת כ-15-20 שניות)..."):
             try:
-                final_report = client.models.generate_content(
+                client = genai.Client(api_key=api_key)
+                
+                # ביצוע קריאה בודדת ומאובטחת
+                response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=prompt_final,
-                    config=types.GenerateContentConfig(temperature=0.3)
+                    contents=prompt_unified,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
+                    )
                 )
+                
                 st.write("---")
-                st.header("📋 דוח אבחנות מודיעין פיננסי משולב (סינתזה סופית)")
-                st.markdown(final_report.text)
-            except Exception as final_exc:
-                st.error(f"⚠️ מנוע הסינתזה נחסם זמנית על ידי ה-API החינמי: {str(final_exc)}\n\nהמלצה: המתן חצי דקה ולחץ שוב על כפתור ההפעלה.")
+                st.success("✅ המחקר הושלם בהצלחה תוך שימוש בקריאה בודדת!")
+                st.header("📋 דוח אבחנות מודיעין פיננסי משולב")
+                st.markdown(response.text)
+                
+                # הצגת מקורות המידע בהם הסוכן ביקר
+                if response.candidates and response.candidates.grounding_metadata:
+                    metadata = response.candidates.grounding_metadata
+                    if metadata.grounding_chunks:
+                        with st.expander("🔗 צפה במקורות ואתרי החדשות מהם הסוכן שאב מידע:"):
+                            for chunk in metadata.grounding_chunks:
+                                if chunk.web:
+                                    st.write(f"- [{chunk.web.title}]({chunk.web.uri})")
+                                    
+            except Exception as e:
+                if "429" in str(e):
+                    st.error("❌ חרגת ממכסת הבקשות היומית הזמנית של גוגל למסלול החינמי. גוגל תאפס ותפתח לך את החשבון מחדש אוטומטית בהמשך היום. הקוד הנוכחי שהעלינו כעת ימנע את הישנות המקרה ברגע שהחסימה תשתחרר!")
+                else:
+                    st.error(f"❌ שגיאה בהפעלת מנוע המחקר: {str(e)}")
