@@ -1,9 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import matplotlib.pyplot as plt
-import io
-import time
 from google import genai
 from google.genai import types
 
@@ -11,7 +8,7 @@ from google.genai import types
 st.set_page_config(page_title="Macro AI Screener", layout="wide")
 st.title("🎯 Macro AI Alpha Core - סורק מניות חכם")
 
-# --- פונקציות ליבה מקומיות (ללא עלות API) ---
+# --- פונקציות ליבה מקומיות חסינות קריסה ---
 
 def fetch_live_market_dashboard():
     indices = {"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "תל אביב 35": "^TA35.TA"}
@@ -47,24 +44,34 @@ def fetch_fx_rates():
     return fx_rates
 
 def scan_sector_fundamentals(tickers):
+    """פונקציה משופרת וחסינה למשיכת נתוני שוק והשוואה מהירה ללא תלות ב-info API"""
     scan_results = []
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            info = stock.info
+            # משיכת היסטוריה ארוכה לצורך חישובים טכניים ופונדמנטליים יציבים
             hist = stock.history(period="1y")
+            if hist.empty: continue
             
-            ma200 = hist['Close'].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else hist['Close'].mean()
             current_price = hist['Close'].iloc[-1]
+            
+            # חישוב תשואה בחצי שנה האחרונה (מומנטום)
+            price_6m_ago = hist['Close'].iloc[-126] if len(hist) >= 126 else hist['Close'].iloc[0]
+            return_6m = ((current_price - price_6m_ago) / price_6m_ago) * 100
+            
+            # חישוב מרחק מממוצע נע 200 ימים
+            ma200 = hist['Close'].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else hist['Close'].mean()
             dist_ma200 = ((current_price - ma200) / ma200) * 100
+            
+            # נפח מסחר ממוצע לאחרונה (אינדיקטור לנזילות ועניין מוסדי)
+            avg_volume = hist['Volume'].tail(10).mean()
             
             scan_results.append({
                 "מנייה": ticker,
                 "מחיר נוכחי ($)": round(current_price, 2),
-                "מכפיל רווח P/E": info.get("trailingPE", "N/A"),
-                "מרווח תפעולי": f"{info.get('operatingMargins', 0) * 100:.1f}%" if info.get('operatingMargins') else "N/A",
-                "יחס חוב/הון": info.get("debtToEquity", "N/A"),
-                "מרחק מ-MA200": f"{dist_ma200:.1f}%"
+                "תשואה 6 חודשים": f"{return_6m:.1f}%",
+                "מיקום מעל ממוצע 200": f"{dist_ma200:.1f}%",
+                "מחזור מסחר ממוצע (10 ימים)": f"{avg_volume:,.0f}"
             })
         except:
             continue
@@ -76,7 +83,7 @@ live_fx = fetch_fx_rates()
 idx_cols = st.columns(len(live_indices) + len(live_fx))
 
 for i, (name, data) in enumerate(live_indices.items()):
-    if data and data[0]: idx_cols[i].metric(label=name, value=f"{data[0]:,.1f}", delta=f"{data[1]:.2f}%")
+    if data and data[0]: idx_cols[i].metric(label=name, value=f"{data[0]:,.1f}", delta=f"{data[1]:%.2f}%")
 for i, (name, data) in enumerate(live_fx.items()):
     if data and data[0]: idx_cols[len(live_indices) + i].metric(label=name, value=f"{data[0]:.3f}", delta=f"{data[1]:.4f}")
 
@@ -85,7 +92,7 @@ st.write("---")
 # הגדרת סקטורים
 SECTOR_MAP = {
     "Technology & AI Semiconductors": ["NVDA", "TSM", "AMD", "ASML"],
-    "Energy & Global Infrastructure": ["XOM", "CVX", "SHEL", "NextEra"],
+    "Energy & Global Infrastructure": ["XOM", "CVX", "SHEL", "NEXTERA"],
     "Commodities & Global Shipping": ["VALE", "CAT", "ZIM", "BHP"],
     "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
 }
@@ -106,26 +113,29 @@ if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
             tickers = SECTOR_MAP[selected_sector]
             df_sector = scan_sector_fundamentals(tickers)
             
-            st.subheader(f"📊 ממצאי סינון וסריקה עבור ענף: {selected_sector}")
-            st.dataframe(df_sector, use_container_width=True, hide_index=True)
-            
-            st.write("")
-            st.subheader("💡 אבחנת מנוע מהירה (איתור פוטנציאל)")
-            
-            prompt_quick = f"""
-            You are a stock screener assistant. Look at this processed data table for the sector {selected_sector}:
-            {df_sector.to_string()}
-            Based strictly on these metrics (P/E, Margins, Debt, MA200 distance) and risk profile '{risk_profile}', identify WHICH stock has the highest investment potential right now.
-            Provide a short, 3-sentence summary in Hebrew explaining why, and state a clear top pick.
-            Respond strictly in Hebrew.
-            """
-            try:
-                client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_quick)
-                st.info(response.text)
-                st.session_state.active_tickers = tickers
-            except Exception as e:
-                st.error(f"שגיאה בהפקת האבחנה המהירה: {str(e)}")
+            if df_sector.empty:
+                st.error("שגיאה זמנית במשיכת נתוני המניות מ-Yahoo Finance. אנא נסה שוב בעוד מספר רגעים.")
+            else:
+                st.subheader(f"📊 ממצאי סינון וסריקה עבור ענף: {selected_sector}")
+                st.dataframe(df_sector, use_container_width=True, hide_index=True)
+                
+                st.write("")
+                st.subheader("💡 אבחנת מנוע מהירה (איתור פוטנציאל)")
+                
+                prompt_quick = f"""
+                You are a senior hedge fund screener. Look at this processed data table for the sector {selected_sector}:
+                {df_sector.to_string()}
+                Based strictly on these momentum metrics (6-month return, position above MA200, average volume) and risk profile '{risk_profile}', identify WHICH stock has the highest investment potential right now.
+                Provide a short, 3-sentence summary in Hebrew explaining why, and state a clear top pick.
+                Respond strictly in Hebrew.
+                """
+                try:
+                    client = genai.Client(api_key=api_key)
+                    response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_quick)
+                    st.info(response.text)
+                    st.session_state.active_tickers = tickers
+                except Exception as e:
+                    st.error(f"שגיאה בהפקת האבחנה המהירה: {str(e)}")
 
 if "active_tickers" in st.session_state:
     st.write("---")
