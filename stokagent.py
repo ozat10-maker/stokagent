@@ -1,6 +1,13 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
+from google import genai
+from google.genai import types
 
+st.set_page_config(page_title="Macro AI Core v10", layout="wide")
+st.title("🎯 Macro AI Alpha Core - מערכת מודיעין פיננסי משולבת")
+
+# --- פונקציות ליבה מקומיות (מאוחדות בקובץ אחד) ---
 def fetch_live_market_dashboard():
     indices = {"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "תל אביב 35": "^TA35.TA"}
     dashboard = {}
@@ -14,10 +21,8 @@ def fetch_live_market_dashboard():
                 dashboard[name] = (current_price, pct_change)
             elif not hist.empty:
                 dashboard[name] = (hist['Close'].iloc[-1], 0.0)
-            else: 
-                dashboard[name] = (None, None)
-        except: 
-            dashboard[name] = (None, None)
+            else: dashboard[name] = (None, None)
+        except: dashboard[name] = (None, None)
     return dashboard
 
 def fetch_fx_rates():
@@ -29,14 +34,11 @@ def fetch_fx_rates():
             hist = stock.history(period="2d")
             if not hist.empty:
                 current_rate = hist['Close'].iloc[-1]
-                if current_rate < 1.0: 
-                    current_rate = 1 / current_rate
+                if current_rate < 1.0: current_rate = 1 / current_rate
                 change = current_rate - (hist['Close'].iloc[-2] if len(hist) >= 2 else current_rate)
                 fx_rates[name] = (current_rate, change)
-            else: 
-                fx_rates[name] = (None, None)
-        except: 
-            fx_rates[name] = (None, None)
+            else: fx_rates[name] = (None, None)
+        except: fx_rates[name] = (None, None)
     return fx_rates
 
 def fetch_commodity_price(commodity_ticker):
@@ -47,8 +49,7 @@ def fetch_commodity_price(commodity_ticker):
             current_price = hist['Close'].iloc[-1]
             pct_change = ((current_price - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100 if len(hist) >= 2 else 0.0
             return f"${current_price:,.2f} ({pct_change:+.1f}%)"
-    except: 
-        pass
+    except: pass
     return "N/A"
 
 def scan_sector_fundamentals(tickers):
@@ -57,8 +58,7 @@ def scan_sector_fundamentals(tickers):
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="1y")
-            if hist.empty: 
-                continue
+            if hist.empty: continue
             current_price = hist['Close'].iloc[-1]
             price_6m_ago = hist['Close'].iloc[-126] if len(hist) >= 126 else hist['Close'].iloc
             return_6m = ((current_price - price_6m_ago) / price_6m_ago) * 100
@@ -67,32 +67,12 @@ def scan_sector_fundamentals(tickers):
             avg_volume = hist['Volume'].tail(10).mean()
             
             scan_results.append({
-                "מנייה": ticker, 
-                "מחיר נוכחי ($)": round(current_price, 2),
-                "תשואה 6 חודשים": f"{return_6m:.1f}%", 
-                "מיקום מעל ממוצע 200": f"{dist_ma200:.1f}%",
+                "מנייה": ticker, "מחיר נוכחי ($)": round(current_price, 2),
+                "תשואה 6 חודשים": f"{return_6m:.1f}%", "מיקום מעל ממוצע 200": f"{dist_ma200:.1f}%",
                 "מחזור מסחר ממוצע (10 ימים)": f"{avg_volume:,.0f}"
             })
-        except: 
-            continue
+        except: continue
     return pd.DataFrame(scan_results)
-import streamlit as st
-import os
-import sys
-from google import genai
-from google.genai import types
-
-# הוספת נתיב השורש הנוכחי על מנת לוודא ששרת השרתים מזהה את הקובץ utils.py
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from utils import (
-    fetch_live_market_dashboard,
-    fetch_fx_rates,
-    fetch_commodity_price,
-    scan_sector_fundamentals
-)
-
-st.set_page_config(page_title="Macro AI Core v10", layout="wide")
-st.title("🎯 Macro AI Alpha Core - מערכת מודיעין פיננסי משולבת")
 
 # --- הצגת לוח מחוונים עליון בזמן אמת ---
 live_indices = fetch_live_market_dashboard()
@@ -103,19 +83,14 @@ idx_cols = st.columns(len(all_metrics))
 for i, (name, data) in enumerate(all_metrics.items()):
     if data and data is not None:
         val, change = data
-        if "ILS" in name: 
-            idx_cols[i].metric(label=name, value=f"{val:.3f} ש\"ח", delta=f"{change:.4f}")
-        else: 
-            idx_cols[i].metric(label=name, value=f"{val:,.1f}", delta=f"{change:.2f}%")
-    else: 
-        idx_cols[i].metric(label=name, value="N/A")
+        if "ILS" in name: idx_cols[i].metric(label=name, value=f"{val:.3f} ש\"ח", delta=f"{change:.4f}")
+        else: idx_cols[i].metric(label=name, value=f"{val:,.1f}", delta=f"{change:.2f}%")
+    else: idx_cols[i].metric(label=name, value="N/A")
 
 st.write("---")
 
-if "GEMINI_API_KEY" in st.secrets: 
-    api_key = st.secrets["GEMINI_API_KEY"]
-else: 
-    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
+if "GEMINI_API_KEY" in st.secrets: api_key = st.secrets["GEMINI_API_KEY"]
+else: api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
 risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 
 # =====================================================================
@@ -125,8 +100,7 @@ st.header("🛰️ רדאר אירועים וטרנדים גלובליים (Macr
 st.markdown("סריקה אקטיבית של אירועים גיאופוליטיים, רגולטוריים וכלכליים ברחבי העולם המאותתים על תנופה מגזרית.")
 
 if st.button("🚀 הפעל רדאר אירועי מאקרו עולמיים", type="secondary"):
-    if not api_key: 
-        st.warning("אנא הזן מפתח API בתפריט הצד.")
+    if not api_key: st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
         with st.spinner("הסוכן סורק מקורות גלובליים, חוזי אספקה, ושינויי רגולציה בזמן אמת..."):
             prompt_catalyst = """
@@ -145,8 +119,7 @@ if st.button("🚀 הפעל רדאר אירועי מאקרו עולמיים", ty
                 st.write("---")
                 st.success("✅ סריקת הטרנדים הגלובלית הושלמה!")
                 st.markdown(catalyst_response.text)
-            except Exception as e: 
-                st.error(f"שגיאה בהפעלת הרדאר הגלובלי: {str(e)}")
+            except Exception as e: st.error(f"שגיאה בהפעלת הרדאר הגלובלי: {str(e)}")
 
 st.write("---")
 
@@ -168,14 +141,12 @@ commodity_price_str = fetch_commodity_price(current_sector_data["commodity_ticke
 st.info(f"📊 **עוגן מאקרו סקטוריאלי:** {current_sector_data['commodity_name']} עומד כעת על: **{commodity_price_str}**")
 
 if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
-    if not api_key: 
-        st.warning("אנא הזן מפתח API בתפריט הצד.")
+    if not api_key: st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
         with st.spinner("מריץ סורק נתונים פונדמנטלי וטכני מקומי..."):
             tickers = current_sector_data["tickers"]
             df_sector = scan_sector_fundamentals(tickers)
-            if df_sector.empty: 
-                st.error("שגיאה זמנית במשיכת נתוני המניות.")
+            if df_sector.empty: st.error("שגיאה זמנית במשיכת נתוני המניות.")
             else:
                 st.subheader(f"📊 ממצאי סינון וסריקה עבור ענף: {selected_sector}")
                 st.dataframe(df_sector, use_container_width=True, hide_index=True)
@@ -187,8 +158,7 @@ if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
                     response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_quick)
                     st.info(response.text)
                     st.session_state.all_active_tickers = tickers
-                except Exception as e: 
-                    st.error(f"שגיאה בהפקת האבחנה המהירה: {str(e)}")
+                except Exception as e: st.error(f"שגיאה בהפקת האבחנה המהירה: {str(e)}")
 
 if "all_active_tickers" in st.session_state:
     st.write("---")
@@ -206,5 +176,4 @@ if "all_active_tickers" in st.session_state:
                 )
                 st.write("---")
                 st.markdown(deep_response.text)
-            except Exception as e: 
-                st.error(f"שגיאה בהפקת הדוח המלא: {str(e)}")
+            except Exception as e: st.error(f"שגיאה בהפקת הדוח המלא: {str(e)}")
