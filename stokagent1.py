@@ -104,7 +104,7 @@ else:
     api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
 risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 # =====================================================================
-# רכיב א': רדאר אירועים וטרנדים גלובליים (Top-Down Model)
+# רכיב א': רדאר אירועים וטרנדים גלובליים (Top-Down Model) - משודרג עם מניות יעד
 # =====================================================================
 st.header("🛰️ רדאר אירועים וטרנדים גלובליים (Macro Catalyst Radar)")
 st.markdown("סריקה אקטיבית של אירועים גיאופוליטיים, רגולטוריים וכלכליים ברחבי העולם המאותתים על תנופה מגזרית.")
@@ -114,11 +114,17 @@ if st.button("🚀 הפעל רדאר אירועי מאקרו עולמיים", ty
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
         with st.spinner("הסוכן סורק מקורות גלובליים, חוזי אספקה, ושינויי רגולציה בזמן אמת..."):
+            
+            # שדרוג הפרומפט: הנחיה נוקשה להצגת מניות וסימולים לכל טרנד
             prompt_catalyst = """
             You are a global macro-economic intelligence agent. Your job is to scan the live web using Google Search 
             to find major breaking events from the last few weeks/months that signal a massive structural tailwind or headwind for specific sectors.
             Focus your search queries on government subsidies, supply chain anomalies, and geopolitical energy shifts.
+            
             Synthesize your findings and generate a report in Hebrew under headers: אירועי המאקרו המשמעותיים, ענפים שיחוו תנופה, וסיכונים וצווארי בקבוק.
+            
+            CRITICAL MANDATE: For each trend or sector identified as a "Structural Winner", you MUST explicitly list at least 2-3 specific publicly traded stocks (with their tickers, e.g., NVDA, XOM) that are positioned to capture this momentum, explaining briefly why they should be watched.
+            
             Respond strictly and entirely in Hebrew.
             """
             try:
@@ -183,7 +189,6 @@ if "all_active_tickers" in st.session_state:
     if st.button("🌐 הפק דוח מקיף ומלא (Bloomberg, TradingView, 13F & Quiver)", type="secondary"):
         with st.spinner(f"סוכן הרשת סורק כעת את Bloomberg, TradingView ונתוני Quiver Quant על {chosen_ticker}..."):
             
-            # פרומפט משודרג הכולל את מנדט החיפוש הציבורי והפוליטי מ-Quiver Quantitative
             prompt_deep = f"""
             Generate a full Alpha Convergence Report for {chosen_ticker} (Risk: {risk_profile}). 
             Use Google Search tool to extract and cross-reference insights from these exact domains and topics:
@@ -193,14 +198,9 @@ if "all_active_tickers" in st.session_state:
             
             Respond strictly and entirely in Hebrew. Structure the report precisely under these headers:
             ### 📋 תקציר מנהלים ומודיעין מהשטח
-            
             ### 🏛️ מכ\"ם נבחרי ציבור ומסחר פוליטי (Quiver Quant)
-            (Detail any recent political trading volume, political cluster buys, or legislative committees alignment found for {chosen_ticker}).
-            
             ### 🐋 תזרים כסף חכם ומוסדי (דיווחי 13F)
-            
             ### 📊 מדד התלכדות תובנות (0-100)
-            
             ### 🚀 המלצה אסטרטגית מנומקת
             """
             try:
