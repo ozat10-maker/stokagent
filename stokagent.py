@@ -21,8 +21,10 @@ def fetch_live_market_dashboard():
                 current_price = hist['Close'].iloc[-1]
                 pct_change = ((current_price - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
                 dashboard[name] = (current_price, pct_change)
-            else:
+            elif not hist.empty:
                 dashboard[name] = (hist['Close'].iloc[-1], 0.0)
+            else:
+                dashboard[name] = (None, None)
         except:
             dashboard[name] = (None, None)
     return dashboard
@@ -39,6 +41,8 @@ def fetch_fx_rates():
                 if current_rate < 1.0: current_rate = 1 / current_rate
                 change = current_rate - (hist['Close'].iloc[-2] if len(hist) >= 2 else current_rate)
                 fx_rates[name] = (current_rate, change)
+            else:
+                fx_rates[name] = (None, None)
         except:
             fx_rates[name] = (None, None)
     return fx_rates
@@ -49,7 +53,6 @@ def scan_sector_fundamentals(tickers):
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            # משיכת היסטוריה ארוכה לצורך חישובים טכניים ופונדמנטליים יציבים
             hist = stock.history(period="1y")
             if hist.empty: continue
             
@@ -63,7 +66,7 @@ def scan_sector_fundamentals(tickers):
             ma200 = hist['Close'].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else hist['Close'].mean()
             dist_ma200 = ((current_price - ma200) / ma200) * 100
             
-            # נפח מסחר ממוצע לאחרונה (אינדיקטור לנזילות ועניין מוסדי)
+            # נפח מסחר ממוצע לאחרונה
             avg_volume = hist['Volume'].tail(10).mean()
             
             scan_results.append({
@@ -80,12 +83,23 @@ def scan_sector_fundamentals(tickers):
 # --- הצגת לוח מחוונים עליון בזמן אמת ---
 live_indices = fetch_live_market_dashboard()
 live_fx = fetch_fx_rates()
-idx_cols = st.columns(len(live_indices) + len(live_fx))
 
-for i, (name, data) in enumerate(live_indices.items()):
-    if data and data[0]: idx_cols[i].metric(label=name, value=f"{data[0]:,.1f}", delta=f"{data[1]:%.2f}%")
-for i, (name, data) in enumerate(live_fx.items()):
-    if data and data[0]: idx_cols[len(live_indices) + i].metric(label=name, value=f"{data[0]:.3f}", delta=f"{data[1]:.4f}")
+# איחוד כל המדדים להצגה בשורה אחת
+all_metrics = {**live_indices, **live_fx}
+idx_cols = st.columns(len(all_metrics))
+
+for i, (name, data) in enumerate(all_metrics.items()):
+    if data and data[0] is not None:
+        val = data[0]
+        change = data[1] if data[1] is not None else 0.0
+        
+        # זיהוי האם מדובר במט"ח או מדד מניות לצורך פורמט תצוגה
+        if "ILS" in name:
+            idx_cols[i].metric(label=name, value=f"{val:.3f}", delta=f"{change:.4f}")
+        else:
+            idx_cols[i].metric(label=name, value=f"{val:,.1f}", delta=f"{change:.2f}%")
+    else:
+        idx_cols[i].metric(label=name, value="N/A")
 
 st.write("---")
 
