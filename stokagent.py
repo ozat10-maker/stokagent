@@ -1,14 +1,5 @@
-import streamlit as st
 import yfinance as yf
 import pandas as pd
-from google import genai
-from google.genai import types
-
-# הגדרת תצורת דף רחב למערכת האנליסטים
-st.set_page_config(page_title="Macro AI Screener", layout="wide")
-st.title("🎯 Macro AI Alpha Core - סורק מניות חכם")
-
-# --- פונקציות ליבה מקומיות חסינות קריסה ---
 
 def fetch_live_market_dashboard():
     indices = {"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "תל אביב 35": "^TA35.TA"}
@@ -47,8 +38,19 @@ def fetch_fx_rates():
             fx_rates[name] = (None, None)
     return fx_rates
 
+def fetch_commodity_price(commodity_ticker):
+    try:
+        stock = yf.Ticker(commodity_ticker)
+        hist = stock.history(period="2d")
+        if not hist.empty:
+            current_price = hist['Close'].iloc[-1]
+            pct_change = ((current_price - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100 if len(hist) >= 2 else 0.0
+            return f"${current_price:,.2f} ({pct_change:+.1f}%)"
+    except:
+        pass
+    return "N/A"
+
 def scan_sector_fundamentals(tickers):
-    """פונקציה משופרת וחסינה למשיכת נתוני שוק והשוואה מהירה ללא תלות ב-info API"""
     scan_results = []
     for ticker in tickers:
         try:
@@ -58,15 +60,12 @@ def scan_sector_fundamentals(tickers):
             
             current_price = hist['Close'].iloc[-1]
             
-            # חישוב תשואה בחצי שנה האחרונה (מומנטום)
             price_6m_ago = hist['Close'].iloc[-126] if len(hist) >= 126 else hist['Close'].iloc[0]
             return_6m = ((current_price - price_6m_ago) / price_6m_ago) * 100
             
-            # חישוב מרחק מממוצע נע 200 ימים
             ma200 = hist['Close'].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else hist['Close'].mean()
             dist_ma200 = ((current_price - ma200) / ma200) * 100
             
-            # נפח מסחר ממוצע לאחרונה
             avg_volume = hist['Volume'].tail(10).mean()
             
             scan_results.append({
@@ -79,21 +78,32 @@ def scan_sector_fundamentals(tickers):
         except:
             continue
     return pd.DataFrame(scan_results)
+import streamlit as st
+from google import genai
+from google.genai import types
+
+# ייבוא פונקציות מקובץ העזר
+from utils import (
+    fetch_live_market_dashboard,
+    fetch_fx_rates,
+    fetch_commodity_price,
+    scan_sector_fundamentals
+)
+
+# הגדרת תצורת דף רחב למערכת האנליסטים
+st.set_page_config(page_title="Macro AI Screener v9", layout="wide")
+st.title("🎯 Macro AI Alpha Core - סורק מניות ומקורות אלטרנטיביים")
 
 # --- הצגת לוח מחוונים עליון בזמן אמת ---
 live_indices = fetch_live_market_dashboard()
 live_fx = fetch_fx_rates()
 
-# איחוד כל המדדים להצגה בשורה אחת
 all_metrics = {**live_indices, **live_fx}
 idx_cols = st.columns(len(all_metrics))
 
 for i, (name, data) in enumerate(all_metrics.items()):
     if data and data[0] is not None:
-        val = data[0]
-        change = data[1] if data[1] is not None else 0.0
-        
-        # זיהוי האם מדובר במט"ח או מדד מניות לצורך פורמט תצוגה
+        val, change = data
         if "ILS" in name:
             idx_cols[i].metric(label=name, value=f"{val:.3f}", delta=f"{change:.4f}")
         else:
@@ -103,12 +113,28 @@ for i, (name, data) in enumerate(all_metrics.items()):
 
 st.write("---")
 
-# הגדרת סקטורים
+# הגדרת סקטורים, מניות, וסחורות עוגן מובילות
 SECTOR_MAP = {
-    "Technology & AI Semiconductors": ["NVDA", "TSM", "AMD", "ASML"],
-    "Energy & Global Infrastructure": ["XOM", "CVX", "SHEL", "NEXTERA"],
-    "Commodities & Global Shipping": ["VALE", "CAT", "ZIM", "BHP"],
-    "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
+    "Technology & AI Semiconductors": {
+        "tickers": ["NVDA", "TSM", "AMD", "ASML"],
+        "commodity_name": "חוזה עתידי על נחושת (Copper Futures)",
+        "commodity_ticker": "HG=F"
+    },
+    "Energy & Global Infrastructure": {
+        "tickers": ["XOM", "CVX", "SHEL", "NEXTERA"],
+        "commodity_name": "נפט גולמי מסוג Brent (Crude Oil)",
+        "commodity_ticker": "BZ=F"
+    },
+    "Commodities & Global Shipping": {
+        "tickers": ["VALE", "CAT", "ZIM", "BHP"],
+        "commodity_name": "חוזה עתידי על זהב (Gold Futures)",
+        "commodity_ticker": "GC=F"
+    },
+    "Biotech & Healthcare": {
+        "tickers": ["LLY", "NVO", "PFE", "MRK"],
+        "commodity_name": "מדד התנודתיות בשווקים (VIX Index)",
+        "commodity_ticker": "^VIX"
+    }
 }
 
 if "GEMINI_API_KEY" in st.secrets:
@@ -119,16 +145,22 @@ risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conserv
 
 selected_sector = st.selectbox("בחר ענף שבו תרצה לאתר השקעות ופוטנציאל:", list(SECTOR_MAP.keys()))
 
+# שליפת נתוני סחורת העוגן
+current_sector_data = SECTOR_MAP[selected_sector]
+commodity_price_str = fetch_commodity_price(current_sector_data["commodity_ticker"])
+
+st.info(f"📊 **עוגן מאקרו סקטוריאלי:** {current_sector_data['commodity_name']} עומד כעת על: **{commodity_price_str}**")
+
 if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
     if not api_key:
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
         with st.spinner("מריץ סורק נתונים פונדמנטלי וטכני מקומי..."):
-            tickers = SECTOR_MAP[selected_sector]
+            tickers = current_sector_data["tickers"]
             df_sector = scan_sector_fundamentals(tickers)
             
             if df_sector.empty:
-                st.error("שגיאה זמנית במשיכת נתוני המניות מ-Yahoo Finance. אנא נסה שוב בעוד מספר רגעים.")
+                st.error("שגיאה זמנית במשיכת נתוני המניות מ-Yahoo Finance.")
             else:
                 st.subheader(f"📊 ממצאי סינון וסריקה עבור ענף: {selected_sector}")
                 st.dataframe(df_sector, use_container_width=True, hide_index=True)
@@ -139,7 +171,9 @@ if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
                 prompt_quick = f"""
                 You are a senior hedge fund screener. Look at this processed data table for the sector {selected_sector}:
                 {df_sector.to_string()}
-                Based strictly on these momentum metrics (6-month return, position above MA200, average volume) and risk profile '{risk_profile}', identify WHICH stock has the highest investment potential right now.
+                Macro anchor pricing for this specific sector ({current_sector_data['commodity_name']}): {commodity_price_str}
+                
+                Based strictly on these momentum metrics and the macro anchor status, identify WHICH stock has the highest investment potential right now for a '{risk_profile}' profile.
                 Provide a short, 3-sentence summary in Hebrew explaining why, and state a clear top pick.
                 Respond strictly in Hebrew.
                 """
@@ -156,13 +190,29 @@ if "active_tickers" in st.session_state:
     st.markdown("### 🚀 העמקה ומודיעין עמוק (לפי דרישה בלבד)")
     chosen_ticker = st.selectbox("בחר מנייה ספציפית מהסורק כדי להפיק עליה דוח מלא מהאינטרנט:", st.session_state.active_tickers)
     
-    if st.button("🌐 הפק דוח מקיף ומלא (Bloomberg & TradingView)", type="secondary"):
-        with st.spinner(f"סוכן הרשת יוצא כעת ל-Bloomberg ו-TradingView לחקור את {chosen_ticker}..."):
+    if st.button("🌐 הפק דוח מקיף ומלא (Bloomberg, TradingView & Institutional 13F)", type="secondary"):
+        with st.spinner(f"סוכן הרשת יוצא כעת לסרוק מקורות מוסדיים וכלכליים על {chosen_ticker}..."):
+            
             prompt_deep = f"""
-            Generate a full, comprehensive Alpha Convergence Report for the stock {chosen_ticker} (Risk: {risk_profile}).
-            Use Google Search tool to prioritize insights from site:bloomberg.com and site:tradingview.com.
-            Cover: Executive Macro summary, Technical consensus from TradingView, and Geopolitical supply chain indicators from Bloomberg.
-            Provide a final Alpha Convergence Score (0-100).
+            Generate a full, comprehensive Alpha Convergence Report for the stock {chosen_ticker} (Risk Profile: {risk_profile}).
+            Use Google Search tool to prioritize and extract insights from:
+            1. site:bloomberg.com (Institutional macro news, corporate shifts, and supply chain updates).
+            2. site:tradingview.com (Technical chart patterns, community sentiment, and indicator consensus).
+            3. Institutional Money Flow (Search SEC filings, 13F tracker data, or recent whale activity from Whalewisdom/InsiderSentiment to see if institutional hedge funds are accumulating or distributing {chosen_ticker}).
+            
+            Structure the report exactly as follows in Hebrew:
+            
+            ### 📋 תקציר מנהלים ומודיעין מהשטח (Bloomberg & TradingView)
+            
+            ### 🐋 תזרים כסף חכם ומוסדי (דיווחי SEC & 13F)
+            
+            ### 📊 מדד התלכדות תובנות (Alpha Convergence Score)
+            Calculate a score from 0-100 based on:
+            - 30% Weight: Technical trends.
+            - 30% Weight: Fundamental health.
+            - 40% Weight: Geopolitical & Institutional flows (13F accumulation).
+            
+            ### 🚀 המלצה אסטרטגית מנומקת
             Respond strictly and entirely in Hebrew.
             """
             try:
