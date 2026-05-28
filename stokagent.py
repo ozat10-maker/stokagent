@@ -1,30 +1,87 @@
-import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 import io
-import time
+
+def fetch_live_market_dashboard():
+    indices = {"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "תל אביב 35": "^TA35.TA"}
+    dashboard = {}
+    for name, ticker in indices.items():
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="2d")
+            if len(hist) >= 2:
+                current_price = hist['Close'].iloc[-1]
+                pct_change = ((current_price - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
+                dashboard[name] = (current_price, pct_change)
+            else:
+                dashboard[name] = (hist['Close'].iloc[-1], 0.0)
+        except:
+            dashboard[name] = (None, None)
+    return dashboard
+
+def fetch_fx_rates():
+    fx_tickers = {"USD/ILS (דולר)": "ILS=X", "EUR/ILS (יורו)": "EURILS=X"}
+    fx_rates = {}
+    for name, ticker in fx_tickers.items():
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="2d")
+            if not hist.empty:
+                current_rate = hist['Close'].iloc[-1]
+                if current_rate < 1.0: current_rate = 1 / current_rate
+                change = current_rate - (hist['Close'].iloc[-2] if len(hist) >= 2 else current_rate)
+                fx_rates[name] = (current_rate, change)
+        except:
+            fx_rates[name] = (None, None)
+    return fx_rates
+
+def scan_sector_fundamentals(tickers):
+    """סורק ומחשב מדדים יבשים לכל מניות הענף לצורך השוואה מהירה"""
+    scan_results = []
+    for ticker in tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            hist = stock.history(period="1y")
+            
+            # חישוב מרחק מהממוצע הנע 200 ימי מסחר (אינדיקטור טכני)
+            ma200 = hist['Close'].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else hist['Close'].mean()
+            current_price = hist['Close'].iloc[-1]
+            dist_ma200 = ((current_price - ma200) / ma200) * 100
+            
+            scan_results.append({
+                "מנייה": ticker,
+                "מחיר נוכחי ($)": round(current_price, 2),
+                "מכפיל רווח P/E": info.get("trailingPE", "N/A"),
+                "מרווח תפעולי": f"{info.get('operatingMargins', 0) * 100:.1f}%" if info.get('operatingMargins') else "N/A",
+                "יחס חוב/הון": info.get("debtToEquity", "N/A"),
+                "מרחק מ-MA200": f"{dist_ma200:.1f}%"
+            })
+        except:
+            continue
+    return pd.DataFrame(scan_results)
+import streamlit as st
 from google import genai
 from google.genai import types
+from utils import fetch_live_market_dashboard, fetch_fx_rates, scan_sector_fundamentals
 
-# הגדרת תצורת דף רחב למערכת האנליסטים
-st.set_page_config(page_title="Macro AI Alpha Core - מנוע חסכוני", layout="wide")
+st.set_page_config(page_title="Macro AI Screener", layout="wide")
+st.title("🎯 Macro AI Alpha Core - סורק מניות חכם")
 
-st.title("🎯 Macro AI Alpha Core (v6 - מנוע אחוד וחסכוני)")
-st.subheader("מנוע מחקר מותאם למסלול החינמי - צריכת קריאה בודדת (1 Call) לחיסכון במכסה היומית")
+# 🌐 דאשבורד מאקרו ומט"ח עליון (מהיר וחינמי)
+live_indices = fetch_live_market_dashboard()
+live_fx = fetch_fx_rates()
+idx_cols = st.columns(len(live_indices) + len(live_fx))
 
-# תפריט צד: הגדרות מפתח ופרופיל מנהל השקעות
-st.sidebar.header("⚙️ הגדרות מערכת וסיכון")
+for i, (name, data) in enumerate(live_indices.items()):
+    if data[0]: idx_cols[i].metric(label=name, value=f"{data[0]:,.1f}", delta=f"{data[1]:.1f}%")
+for i, (name, data) in enumerate(live_fx.items()):
+    if data[0]: idx_cols[len(live_indices) + i].metric(label=name, value=f"{data[0]:.3f}", delta=f"{data[1]:.3f}")
 
-if "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-    st.sidebar.success("מפתח API נטען אוטומטית ✅")
-else:
-    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
+st.write("---")
 
-risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
-
-# הגדרת ענפים ומניות מובילות
+# הגדרות סקטורים
 SECTOR_MAP = {
     "Technology & AI Semiconductors": ["NVDA", "TSM", "AMD", "ASML"],
     "Energy & Global Infrastructure": ["XOM", "CVX", "SHEL", "NextEra"],
@@ -32,114 +89,74 @@ SECTOR_MAP = {
     "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
 }
 
-selected_sector = st.selectbox("1. בחר ענף/סקטור לסריקה מקיפה:", list(SECTOR_MAP.keys()))
+# תפריט צד למפתח API
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
+risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 
-st.write("---")
-st.markdown("### 🔍 התעמקות במנייה ספציפית (אופציונלי)")
-use_specific_stock = st.checkbox("אני רוצה לבחור מנייה ספציפית לניתוח בתוך הענף")
+# 1. בחירת ענף להשקעה
+selected_sector = st.selectbox("בחר ענף שבו תרצה לאתר השקעות ופוטנציאל:", list(SECTOR_MAP.keys()))
 
-target_ticker = None
-if use_specific_stock:
-    ticker_options = SECTOR_MAP[selected_sector]
-    selected_ticker = st.selectbox(f"בחר מנייה מתוך ענף {selected_sector}:", ticker_options)
-    custom_ticker = st.text_input("או הזן סימול מנייה אחרת ידנית:").upper().strip()
-    target_ticker = custom_ticker if custom_ticker else selected_ticker
-
-def generate_market_chart(tickers):
-    try:
-        fig, ax = plt.subplots(figsize=(10, 3.5))
-        if isinstance(tickers, str):
-            tickers = [tickers]
-            
-        for ticker in tickers:
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="6m")
-            if not hist.empty:
-                if len(tickers) == 1:
-                    ax.plot(hist.index, hist['Close'], label=f"{ticker} Price ($)", color="blue")
-                    ax.set_title(f"{ticker} Historical Trend (Last 6 Months)")
-                    ax.set_ylabel("Price ($)")
-                else:
-                    normalized_price = (hist['Close'] / hist['Close'].iloc[0]) * 100
-                    ax.plot(hist.index, normalized_price, label=ticker)
-                    ax.set_title("Sector Peer Comparison (Last 6 Months Normalized to 100)")
-                    ax.set_ylabel("Normalized Performance (%)")
-                    
-        ax.legend()
-        ax.grid(True)
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        img_bytes = buf.getvalue()
-        plt.close(fig)
-        return img_bytes
-    except Exception as e:
-        return None
-
-# --- הפעלת מנוע הסוכנים המאוחד ---
-st.write("---")
-if st.button("🚀 הפעל מחקר שוק מאוחד (צורך קריאה בודדת)", type="primary"):
+if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
     if not api_key:
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
-        # הצגת הגרף (מתבצע מקומית בשרת של Streamlit ולא צורך מכסת API)
-        st.markdown("#### 📊 שלב 0: הפקת נתוני שוק ויזואליים...")
-        tickers_to_chart = target_ticker if target_ticker else SECTOR_MAP[selected_sector]
-        img_bytes = generate_market_chart(tickers_to_chart)
-        if img_bytes:
-            st.image(img_bytes, use_container_width=True)
+        with st.spinner("מריץ סורק נתונים פונדמנטלי וטכני מקומי..."):
+            tickers = SECTOR_MAP[selected_sector]
+            df_sector = scan_sector_fundamentals(tickers)
             
-        focus_scope = f"המנייה {target_ticker}" if target_ticker else f"הענף {selected_sector}"
-        
-        # בניית פרומפט מאוחד שמבצע הכל בפעימה אחת
-        prompt_unified = f"""
-        You are an expert investment manager and macro researcher. 
-        Your task is to generate a comprehensive Alpha Convergence Report for {focus_scope} based on a target risk profile of '{risk_profile}'.
-        
-        Using Google Search, explore the web and compile data across these three specific categories:
-        1. **Global Market News:** Summary of recent major geopolitical developments, trade constraints, or macro highlights impacting this asset class.
-        2. **Alternative Data & Logistics:** Look for tracking reports regarding shipping bottlenecks, production gluts, or factory/port activity anomalies.
-        3. **Innovation & Patents:** Search for recent patent filings, regulatory approvals, or technological breakthroughs.
-        
-        Synthesize all of these findings into a polished, definitive investment report in Hebrew.
-        The report must include:
-        - **ממצאים מרכזיים מהשטח (מודיעין פיננסי משולב):** A deep synthesis of the news, alternative metrics, and tech breakthroughs.
-        - **מדד התלכדות תובנות (Alpha Convergence Score):** A numerical score from 0-100 with strict logical justification.
-        - **המלצה אסטרטגית מנומקת:** Clear buy/sell/hold tactical guidance tailored specifically to a {risk_profile} investment strategy.
-        
-        Respond strictly and entirely in Hebrew.
-        """
-        
-        with st.spinner("🧠 סוכן המאקרו המאוחד מבצע חיפוש רשת ומגבש את הדוח הסופי (זה עשוי לקחת כ-15-20 שניות)..."):
+            st.subheader(f"📊 ממצאי סינון וסריקה עבור ענף: {selected_sector}")
+            st.dataframe(df_sector, use_container_width=True, hide_index=True)
+            
+            # קריאת AI מהירה ותמציתית בלבד (ללא חיפוש אינטרנט שמכביד על האפליקציה)
+            st.write("")
+            st.subheader("💡 אבחנת מנוע מהירה (איתור פוטנציאל)")
+            
+            prompt_quick = f"""
+            You are a stock screener assistant. Look at this processed data table for the sector {selected_sector}:
+            {df_sector.to_string()}
+            Based strictly on these metrics (P/E, Margins, Debt, MA200 distance) and risk profile '{risk_profile}', identify WHICH stock has the highest investment potential right now.
+            Provide a short, 3-sentence summary in Hebrew explaining why, and state a clear top pick.
+            Respond strictly in Hebrew.
+            """
+            
             try:
                 client = genai.Client(api_key=api_key)
-                
-                # ביצוע קריאה בודדת ומאובטחת
-                response = client.models.generate_content(
+                response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt_quick)
+                st.info(response.text)
+                # שמירה ב-Session State כדי לאפשר העמקה
+                st.session_state.active_tickers = tickers
+            except Exception as e:
+                st.error(f"שגיאה בהפקת האבחנה המהירה: {str(e)}")
+
+# 2. חלק אופציונלי: הפקת דוח מלא לפי דרישה בלבד
+if "active_tickers" in st.session_state:
+    st.write("---")
+    st.markdown("### 🚀 העמקה ומודיעין עמוק (לפי דרישה בלבד)")
+    chosen_ticker = st.selectbox("בחר מנייה ספציפית מהסורק כדי להפיק עליה דוח מלא מהאינטרנט:", st.session_state.active_tickers)
+    
+    if st.button("🌐 הפק דוח מקיף ומלא (Bloomberg & TradingView)", type="secondary"):
+        with st.spinner(f"סוכן הרשת יוצא כעת ל-Bloomberg ו-TradingView לחקור את {chosen_ticker}..."):
+            prompt_deep = f"""
+            Generate a full, comprehensive Alpha Convergence Report for the stock {chosen_ticker} (Risk: {risk_profile}).
+            Use Google Search tool to prioritize insights from site:bloomberg.com and site:tradingview.com.
+            Cover: Executive Macro summary, Technical consensus from TradingView, and Geopolitical supply chain indicators from Bloomberg.
+            Provide a final Alpha Convergence Score (0-100).
+            Respond strictly and entirely in Hebrew.
+            """
+            try:
+                client = genai.Client(api_key=api_key)
+                deep_response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=prompt_unified,
+                    contents=prompt_deep,
                     config=types.GenerateContentConfig(
                         temperature=0.3,
                         tools=[types.Tool(google_search=types.GoogleSearch())]
                     )
                 )
-                
                 st.write("---")
-                st.success("✅ המחקר הושלם בהצלחה תוך שימוש בקריאה בודדת!")
-                st.header("📋 דוח אבחנות מודיעין פיננסי משולב")
-                st.markdown(response.text)
-                
-                # הצגת מקורות המידע בהם הסוכן ביקר
-                if response.candidates and response.candidates.grounding_metadata:
-                    metadata = response.candidates.grounding_metadata
-                    if metadata.grounding_chunks:
-                        with st.expander("🔗 צפה במקורות ואתרי החדשות מהם הסוכן שאב מידע:"):
-                            for chunk in metadata.grounding_chunks:
-                                if chunk.web:
-                                    st.write(f"- [{chunk.web.title}]({chunk.web.uri})")
-                                    
+                st.markdown(deep_response.text)
             except Exception as e:
-                if "429" in str(e):
-                    st.error("❌ חרגת ממכסת הבקשות היומית הזמנית של גוגל למסלול החינמי. גוגל תאפס ותפתח לך את החשבון מחדש אוטומטית בהמשך היום. הקוד הנוכחי שהעלינו כעת ימנע את הישנות המקרה ברגע שהחסימה תשתחרר!")
-                else:
-                    st.error(f"❌ שגיאה בהפעלת מנוע המחקר: {str(e)}")
+                st.error(f"שגיאה בהפקת הדוח המלא: {str(e)}")
