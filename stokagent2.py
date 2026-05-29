@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 import io
+import time
 from datetime import datetime
 import pytz
 from google import genai
@@ -128,7 +129,7 @@ def render_universal_stock_analysis(ticker_str):
         
         # 2. חישוב מדדי מפתח מקומיים מההיסטוריה
         current_price = hist['Close'].iloc[-1]
-        price_6m_ago = hist['Close'].iloc[0]
+        price_6m_ago = hist['Close'].iloc
         return_6m = ((current_price - price_6m_ago) / price_6m_ago) * 100
         avg_volume = hist['Volume'].tail(10).mean()
         
@@ -149,7 +150,7 @@ def scan_sector_fundamentals(tickers):
             hist = stock.history(period="1y")
             if hist.empty: continue
             current_price = hist['Close'].iloc[-1]
-            price_6m_ago = hist['Close'].iloc[-126] if len(hist) >= 126 else hist['Close'].iloc[0]
+            price_6m_ago = hist['Close'].iloc[-126] if len(hist) >= 126 else hist['Close'].iloc
             return_6m = ((current_price - price_6m_ago) / price_6m_ago) * 100
             ma200 = hist['Close'].rolling(window=200).mean().iloc[-1] if len(hist) >= 200 else hist['Close'].mean()
             dist_ma200 = ((current_price - ma200) / ma200) * 100
@@ -170,7 +171,7 @@ else:
     api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
 risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 # =====================================================================
-# רכיב א': רדאר אירועים גלובליים (הפקת טבלה מובנית חסינת חסימות)
+# רכיב א': רדאר אירועים גלובליים (הפקת טבלה משופרת עם מנגנון Retry)
 # =====================================================================
 st.header("🛰️ רדאר אירועים וטרנדים גלובליים (Macro Catalyst Radar)")
 st.markdown("סריקה אקטיבית המפיקה טבלת מניות פוטנציאליות קונקרטית, ללא דוחות כבדים מראש.")
@@ -179,8 +180,7 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
     if not api_key: 
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
-        with st.spinner("הסוכן סורק את הרשת ומחלץ מניות פוטנציאליות..."):
-            # שינוי הפרומפט למבנה CSV/טקסט מופרד כדי לעקוף את מגבלת ה-JSON והחיפוש
+        with st.spinner("הסוכן סורק את הרשת ומחלץ מניות פוטנציאליות (מנגנון הגנת עומס פעיל)..."):
             prompt_catalyst_stable = """
             You are a global macro-economic asset scanner. Scan the live web using Google Search 
             to find major breaking economic, geopolitical, or subsidy events from the last few weeks.
@@ -199,39 +199,57 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
             XOM | אנרגיה וגיאופוליטיקה | זינוק מחירי הנפט עקב מתחים במפרץ הפרסי. | Medium
             NVDA | טכנולוגיה ושבבים | ביקוש שיא לחומרת בינה מלאכותית וסובסידיות חדשות. | High
             """
-            try:
-                client = genai.Client(api_key=api_key)
-                # קריאה נקייה ללא כבילת ה-MimeType ל-JSON
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash', contents=prompt_catalyst_stable,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3, 
-                        tools=[types.Tool(google_search=types.GoogleSearch())]
+            
+            # לולאת Retry להתמודדות חסינה עם שגיאות 503/עומס שרת
+            max_retries = 3
+            response_text = ""
+            client = genai.Client(api_key=api_key)
+            
+            for attempt in range(max_retries):
+                try:
+                    response = client.models.generate_content(
+                        model='gemini-2.5-flash', contents=prompt_catalyst_stable,
+                        config=types.GenerateContentConfig(
+                            temperature=0.3, 
+                            tools=[types.Tool(google_search=types.GoogleSearch())]
+                        )
                     )
-                )
-                
-                # מנגנון עיבוד הטקסט המקומי והפיכתו לטבלה דינמית
-                lines = response.text.strip().split("\n")
-                parsed_rows = []
-                
-                for line in lines:
-                    if "|" in line:
-                        parts = [p.strip() for p in line.split("|")]
-                        if len(parts) >= 4:
-                            parsed_rows.append({
-                                "מנייה": parts[0],
-                                "תחום/אירוע מאתר": parts[1],
-                                "פרטים ונימוק": parts[2],
-                                "רמת סיכון": parts[3]
-                            })
-                
-                if parsed_rows:
-                    st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
-                else:
-                    st.error("המודל החזיר פלט במבנה לא צפוי. אנא נסה ללחוץ שוב.")
+                    response_text = response.text
+                    break # הצלחנו! יוצאים מהלולאה
+                except Exception as exc:
+                    if "503" in str(exc) or "429" in str(exc):
+                        wait_time = (attempt + 1) * 5
+                        st.caption(f"⚠️ שרת גוגל עמוס זמנית (503). מבצע ניסיון חוזר {attempt + 2}/{max_retries} בעוד {wait_time} שניות...")
+                        time.sleep(wait_time)
+                    else:
+                        st.error(f"שגיאת API: {str(exc)}")
+                        break
+
+            # עיבוד הטקסט שהתקבל והפיכתו לטבלה דינמית בתוך ה-State
+            if response_text:
+                try:
+                    lines = response_text.strip().split("\n")
+                    parsed_rows = []
                     
-            except Exception as e: 
-                st.error(f"שגיאה בתהליך עיבוד נתוני הרדאר: {str(e)}")
+                    for line in lines:
+                        if "|" in line:
+                            parts = [p.strip() for p in line.split("|")]
+                            if len(parts) >= 4:
+                                parsed_rows.append({
+                                    "מנייה": parts[0],
+                                    "תחום/אירוע מאתר": parts[1],
+                                    "פרטים ונימוק": parts[2],
+                                    "רמת סיכון": parts[3]
+                                })
+                    
+                    if parsed_rows:
+                        st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
+                    else:
+                        st.error("השרת החזיר תשובה במבנה לא תקין. נסה ללחוץ שוב בעוד מספר רגעים.")
+                except Exception as parse_err:
+                    st.error(f"שגיאה בעיבוד הטקסט: {str(parse_err)}")
+            else:
+                st.error("❌ השרת עמוס מדי כעת ולא הצליח להשלים את החיפוש לאחר 3 ניסיונות. אנא נסה שוב בעוד כחצי דקה.")
 
 # הצגת טבלת הרדאר במידה ונוצרה בהצלחה
 if st.session_state.radar_stocks_df is not None and not st.session_state.radar_stocks_df.empty:
