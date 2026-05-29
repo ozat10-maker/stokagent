@@ -17,6 +17,8 @@ if "watchlist" not in st.session_state:
     st.session_state.watchlist = []
 if "radar_stocks_df" not in st.session_state:
     st.session_state.radar_stocks_df = None
+if "radar_full_text" not in st.session_state:
+    st.session_state.radar_full_text = ""
 if "all_active_tickers" not in st.session_state:
     st.session_state.all_active_tickers = []
 if "custom_dashboard_indices" not in st.session_state:
@@ -104,9 +106,7 @@ def render_universal_stock_analysis(ticker_str):
     if not ticker_str:
         return
     
-    # ניקוי סופי לסימול המניה למניעת שגיאות רווחים
     clean_ticker = str(ticker_str).strip().upper()
-    
     st.markdown(f"#### 📊 ניתוח טכני ופונדמנטלי קשיח עבור {clean_ticker}")
     
     try:
@@ -114,7 +114,7 @@ def render_universal_stock_analysis(ticker_str):
         hist = stock.history(period="6m")
         
         if hist.empty:
-            st.error(f"❌ {clean_ticker} לא ניתן היה למשוך היסטוריית מחירים עבור הסימול. ודא שהמסחר פעיל בנייר.")
+            st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול {clean_ticker}. ודא שהסימול נכון והמסחר פעיל.")
             return
         
         # 1. יצירת הגרף הטכני
@@ -132,7 +132,7 @@ def render_universal_stock_analysis(ticker_str):
         
         # 2. חישוב מדדי מפתח מקומיים מההיסטוריה
         current_price = hist['Close'].iloc[-1]
-        price_6m_ago = hist['Close'].iloc[0]
+        price_6m_ago = hist['Close'].iloc[0] if len(hist) > 0 else current_price
         return_6m = ((current_price - price_6m_ago) / price_6m_ago) * 100
         avg_volume = hist['Volume'].tail(10).mean()
         
@@ -168,45 +168,48 @@ def scan_sector_fundamentals(tickers):
         except: continue
     return pd.DataFrame(scan_results)
 
-# ניהול מפתח API מתפריט הצד
 if "GEMINI_API_KEY" in st.secrets: 
     api_key = st.secrets["GEMINI_API_KEY"]
 else: 
     api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
 risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 # =====================================================================
-# רכיב א': רדאר אירועים גלובליים (הפקת טבלה משופרת וחסינת רווחים)
+# רכיב א': רדאר אירועים גלובליים (הפקת טבלה + כפתור הרחבת הדוח המלא)
 # =====================================================================
 st.header("🛰️ רדאר אירועים וטרנדים גלובליים (Macro Catalyst Radar)")
-st.markdown("סריקה אקטיבית המפיקה טבלת מניות פוטנציאליות קונקרטית, ללא דוחות כבדים מראש.")
+st.markdown("סריקה אקטיבית המפיקה טבלת מניות מומלצות קונקרטית, עם אפשרות לפתיחת דוח הרקע המלא.")
 
 if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאליות", type="secondary"):
     if not api_key: 
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
-        with st.spinner("הסוכן סורק את הרשת ומחלץ מניות פוטנציאליות (מנגנון הגנת עומס פעיל)..."):
+        with st.spinner("הסוכן מבצע מחקר מאקרו עולמי ומפיק ממצאים..."):
             prompt_catalyst_stable = """
             You are a global macro-economic asset scanner. Scan the live web using Google Search 
             to find major breaking economic, geopolitical, or subsidy events from the last few weeks.
             Based on these events, identify exactly 4 publicly traded stocks that have massive upcoming structural potential.
             
-            You MUST return the output precisely as a plain text block where each line represents a stock, formatted EXACTLY like this:
+            Provide your comprehensive research analysis report in Hebrew first.
+            
+            Then, at the very end of your response, you MUST provide a strict tabular data section wrapped inside an explicit block named [DATA_START] and [DATA_END].
+            Inside that section, each line must represent a stock, formatted EXACTLY like this:
             TICKER | CATALYST_SECTOR | REASON_SENTENCE | RISK_LEVEL
             
-            Rules:
-            - Provide exactly 4 rows.
-            - Do not include any headers, backticks, introduction, or markdown styling.
-            - Write the ticker as a clean, short symbol (e.g., MP, NVDA, XOM) without extra commentary.
-            - Write the values for CATALYST_SECTOR and REASON_SENTENCE strictly in Hebrew.
+            Rules for the data section:
+            - Provide exactly 4 stock rows.
+            - Ticker must be a clean symbol (e.g., MP, INTC, NVDA). Do not leave spaces inside tickers.
+            - Write CATALYST_SECTOR and REASON_SENTENCE strictly in Hebrew.
             - RISK_LEVEL should be either Low, Medium, or High.
             
-            Example of exactly how the text should look:
+            Example of the data section block:
+            [DATA_START]
+            INTC | טכנולוגיה ושבבים | מענקים ממשלתיים חדשים והרחבת ייצור מקומי. | Medium
             XOM | אנרגיה וגיאופוליטיקה | זינוק מחירי הנפט עקב מתחים במפרץ הפרסי. | Medium
-            MP | סחורות ומתכות נדירות | החמרת מגבלות הייצוא של סין על חומרי גלם קריטיים. | High
+            [DATA_END]
             """
             
             max_retries = 3
-            response_text = ""
+            full_text = ""
             client = genai.Client(api_key=api_key)
             
             for attempt in range(max_retries):
@@ -218,56 +221,63 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                             tools=[types.Tool(google_search=types.GoogleSearch())]
                         )
                     )
-                    response_text = response.text
+                    full_text = response.text
                     break
                 except Exception as exc:
                     if "503" in str(exc) or "429" in str(exc):
                         wait_time = (attempt + 1) * 5
-                        st.caption(f"⚠️ שרת גוגל עמוס זמנית (503). מבצע ניסיון חוזר {attempt + 2}/{max_retries} בעוד {wait_time} שניות...")
+                        st.caption(f"⚠️ שרת גוגל עמוס זמנית. מבצע ניסיון חוזר {attempt + 2}/{max_retries}...")
                         time.sleep(wait_time)
                     else:
                         st.error(f"שגיאת API: {str(exc)}")
                         break
 
-            if response_text:
+            if full_text:
+                st.session_state.radar_full_text = full_text
                 try:
-                    lines = response_text.strip().split("\n")
-                    parsed_rows = []
-                    
-                    for line in lines:
-                        if "|" in line:
-                            parts = [p.strip() for p in line.split("|")]
-                            if len(parts) >= 4:
-                                # ניקוי קשיח ומחלט של רווחים נסתרים מסימול המניה
-                                clean_t = str(parts[0]).strip().upper()
-                                parsed_rows.append({
-                                    "מנייה": clean_t,
-                                    "תחום/אירוע מאתר": parts[1],
-                                    "פרטים ונימוק": parts[2],
-                                    "רמת סיכון": parts[3]
-                                })
-                    
-                    if parsed_rows:
-                        st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
+                    if "[DATA_START]" in full_text and "[DATA_END]" in full_text:
+                        data_part = full_text.split("[DATA_START]")[1].split("[DATA_END]")[0].strip()
+                        lines = data_part.split("\n")
+                        parsed_rows = []
+                        
+                        for line in lines:
+                            if "|" in line:
+                                parts = [p.strip() for p in line.split("|")]
+                                if len(parts) >= 4:
+                                    clean_ticker_symbol = str(parts[0]).strip().upper()
+                                    parsed_rows.append({
+                                        "מנייה": clean_ticker_symbol,
+                                        "תחום/אירוע מאתר": parts[1],
+                                        "פרטים ונימוק": parts[2],
+                                        "רמת סיכון": parts[3]
+                                    })
+                        
+                        if parsed_rows:
+                            st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
+                        else:
+                            st.error("לא ניתן היה לפענח את שורות הנתונים. נסה להריץ שוב.")
                     else:
-                        st.error("השרת החזיר תשובה במבנה לא תקין. נסה ללחוץ שוב בעוד מספר רגעים.")
+                        st.error("מבנה הדוח התקבל ללא בלוק הנתונים הייעודי. אנא נסה שוב.")
                 except Exception as parse_err:
                     st.error(f"שגיאה בעיבוד הטקסט: {str(parse_err)}")
             else:
-                st.error("❌ השרת עמוס מדי כעת ולא הצליח להשלים את החיפוש לאחר 3 ניסיונות.")
+                st.error("❌ השרת עמוס מדי כעת ולא הצליח להשלים את החיפוש.")
 
+# הצגת ממצאי הרדאר במידה וקיימים בזיכרון
 if st.session_state.radar_stocks_df is not None and not st.session_state.radar_stocks_df.empty:
-    st.success("✅ אותרו המניות הבאות בעלות פוטנציאל מבני:")
+    st.success("✅ אותרו המניות הבאות בעלות פוטנציאל מבני מתוך ניתוח המאקרו העולמי:")
     st.dataframe(st.session_state.radar_stocks_df, use_container_width=True, hide_index=True)
     
-    tickers_list = st.session_state.radar_stocks_df["מנייה"].tolist()
-    radar_choice = st.selectbox("בחר מנייה מהטבלה כדי לפתוח גרף 6M ולהפיק דוח מלא:", tickers_list)
+    with st.expander("🌐 לחץ כאן כדי לצפות בדוח מחקר המאקרו המלא שלפיו הופקו המסקנות"):
+        st.markdown(st.session_state.radar_full_text.split("[DATA_START]")[0])
     
-    # הפעלת רכיב הגרף המוגן והמנוקה מרווחים
+    tickers_list = st.session_state.radar_stocks_df["מנייה"].tolist()
+    radar_choice = st.selectbox("בחר מנייה מהטבלה כדי לפתוח גרף 6M ולהפיק דוח ספציפי:", tickers_list)
+    
     render_universal_stock_analysis(radar_choice)
     
     col_r1, col_r2 = st.columns(2)
-    if col_r1.button("🌐 הפק דוח מקיף ומלא (Bloomberg & TradingView)", type="primary"):
+    if col_r1.button("🌐 הפק דוח אנליסט עמוק ספציפי (Bloomberg & TradingView)", type="primary"):
         with st.spinner(f"סוכן הרשת חוקר כעת לעומק את {radar_choice}..."):
             prompt_deep = f"Generate a full Alpha Convergence Report for {str(radar_choice).strip().upper()} (Risk: {risk_profile}). Use Google Search tool to extract insights from site:bloomberg.com and site:tradingview.com. Respond strictly and entirely in Hebrew."
             try:
@@ -280,14 +290,13 @@ if st.session_state.radar_stocks_df is not None and not st.session_state.radar_s
                 st.markdown(deep_res.text)
             except Exception as e: st.error(f"שגיאה בהפקת הדוח: {str(e)}")
             
-    if col_r2.button(f"📌 הוסף את {radar_choice} לרשימת המעקב האישית"):
+    if col_r2.button(f"📌 הוסף את {radar_choice} לרשימת המעקב האישית", key="add_radar_watch"):
         clean_rc = str(radar_choice).strip().upper()
         if clean_rc not in st.session_state.watchlist:
             st.session_state.watchlist.append(clean_rc)
             st.success(f"המנייה {clean_rc} נוספה בהצלחה למעקב!")
 
 st.write("---")
-
 # =====================================================================
 # רכיב ב': סורק מניות ענפי (Bottom-Up Model)
 # =====================================================================
@@ -331,7 +340,7 @@ if st.session_state.all_active_tickers:
                 st.markdown(deep_response.text)
             except Exception as e: st.error(f"שגיאה בהפקת הדוח המלא: {str(e)}")
             
-    if col_s2.button(f"📌 הוסף את {chosen_ticker} למחברת מעקב ארוך טווח"):
+    if col_s2.button(f"📌 הוסף את {chosen_ticker} למחברת מעקב ארוך טווח", key="add_scan_watch"):
         clean_ct = str(chosen_ticker).strip().upper()
         if clean_ct not in st.session_state.watchlist:
             st.session_state.watchlist.append(clean_ct)
@@ -352,7 +361,7 @@ else:
     watchlist_df = scan_sector_fundamentals(st.session_state.watchlist)
     st.dataframe(watchlist_df, use_container_width=True, hide_index=True)
     
-    selected_tracked = st.selectbox("בחר מנייה מרשימת המעקב לצפייה בגרף 6M עדכני:", st.session_state.watchlist)
+    selected_tracked = st.selectbox("בחר מנייה מרשימת המעקב לצפייה בגרף 6M עדכני:", st.session_state.watchlist, key="select_tracked_stock")
     render_universal_stock_analysis(selected_tracked)
     
     if st.button("🗑️ נקה את כל רשימת המעקב"):
