@@ -13,7 +13,6 @@ from google.genai import types
 # הגדרת תצורת דף רחב למערכת
 st.set_page_config(page_title="Macro AI Terminal", layout="wide")
 
-# הגדרת מפתח ה-API והסיכון בראש הדף
 st.sidebar.header("⚙️ הגדרות מערכת וסיכון")
 
 if "GEMINI_API_KEY" in st.secrets: 
@@ -96,14 +95,15 @@ if live_data:
         else: cols[i].metric(label=name, value="N/A")
 
 st.write("---")
-# --- רכיב אוניברסלי מוגן: פונקציית הפקת גרף ונתונים חסינה הרמטית ומנקה ידנית ---
+# --- רכיב אוניברסלי מוגן: פונקציית הפקת גרף ונתונים חסינה הרמטית עם חיתוך אורך ---
 def render_universal_stock_analysis(ticker_str, unique_key_prefix=""):
-    """מנקה הרמטית את הטיקר מכל שארית של רווחים, גרשיים או סוגריים ומציגה נתונים בלחיצה יזומה."""
+    """מנקה לחלוטין את הטיקר וחותכת רק את 5 האותיות הראשונות כדי להעיף טקסט עודף של ה-AI."""
     if not ticker_str:
         return
     
-    # ניקוי מוחלט של כל תו שאינו אות רגילה באנגלית - חסין לחלוטין מכל פלט של ה-AI
-    clean_ticker = re.sub(r'[^a-zA-Z]', '', str(ticker_str)).strip().upper()
+    # 🎯 התיקון הסופי: ניקוי אותיות וחיתוך קשיח של עד 5 תווים בלבד (Slice [0:5])
+    raw_cleaned = re.sub(r'[^a-zA-Z]', '', str(ticker_str)).strip().upper()
+    clean_ticker = raw_cleaned[:5]
     
     if not clean_ticker or len(clean_ticker) < 1:
         st.warning("לא זוהה סימול מנייה תקין באנגלית.")
@@ -118,7 +118,7 @@ def render_universal_stock_analysis(ticker_str, unique_key_prefix=""):
                 hist = stock.history(period="6m")
                 
                 if hist.empty:
-                    st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול '{clean_ticker}'. ודא שהסימול פעיל בבורסה (למשל: XOM, INTC, NVDA).")
+                    st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול '{clean_ticker}'. ודא שהסימול פעיל בבורסה.")
                     return
                 
                 # ציור הגרף
@@ -152,7 +152,8 @@ def scan_sector_fundamentals(tickers):
     scan_results = []
     for ticker in tickers:
         try:
-            clean_t = re.sub(r'[^a-zA-Z]', '', str(ticker)).strip().upper()
+            raw_t = re.sub(r'[^a-zA-Z]', '', str(ticker)).strip().upper()
+            clean_t = raw_t[:5]
             stock = yf.Ticker(clean_t)
             hist = stock.history(period="1y")
             if hist.empty: continue
@@ -172,7 +173,7 @@ def scan_sector_fundamentals(tickers):
     return pd.DataFrame(scan_results)
 
 # =====================================================================
-# רכיב א': רדאר אירועים גלובליים (טבלה חסינת שינויי פלט AI)
+# רכיב א': רדאר אירועים גלובליים
 # =====================================================================
 st.header("🛰️ רדאר אירועים וטרנדים גלובליים (Macro Catalyst Radar)")
 st.markdown("סריקה אקטיבית המפיקה טבלת מניות מומלצות קונקרטית, ללא דוחות או גרפים כבושים מראש.")
@@ -193,7 +194,7 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
             
             Rules for the lines:
             - Provide exactly 4 stock rows.
-            - Ticker must be a clean, unquoted string symbol (e.g., MP, INTC, NVDA, XOM). Do not add any quotes, brackets or extra characters inside tickers.
+            - Ticker must be a clean, unquoted string symbol (e.g., MP, INTC, NVDA, XOM). Do not add any text or explanation in the ticker part.
             - Write CATALYST_SECTOR and REASON_SENTENCE strictly in Hebrew.
             - RISK_LEVEL should be either Low, Medium, or High.
             """
@@ -219,23 +220,25 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                     ticker_extraction = []
                     
                     for line in lines:
-                        if "|" in line and "TICKER" not in line: # סורק אוטומטית כל שורה שמכילה פייפ
+                        if "|" in line and "TICKER" not in line:
                             parts = [p.strip() for p in line.split("|")]
                             if len(parts) >= 4:
-                                # 🎯 תיקון קריטי: לקיחת איבר 0 (הטיקר) בצורה נקייה וקשיחה ללא המרת כל המערך לטקסט!
-                                raw_ticker = parts[0]
-                                t_cleaned = re.sub(r'[^a-zA-Z]', '', str(raw_ticker)).strip().upper()
-                                if t_cleaned and len(t_cleaned) < 8: # סינון כותרות ארוכות במקרה שהמודל חרג מהמבנה
+                                # חילוץ נקי וחיתוך קשיח ל-5 תווים בלבד למניעת השרשרת
+                                raw_ticker = parts
+                                raw_cleaned = re.sub(r'[^a-zA-Z]', '', str(raw_ticker)).strip().upper()
+                                t_cleaned = raw_cleaned[:5]
+                                
+                                if t_cleaned:
                                     ticker_extraction.append(t_cleaned)
                                     parsed_rows.append({
-                                        "מנייה": t_cleaned, "תחום/אירוע מאתר": parts[1],
-                                        "פרטים ונימוק": parts[2], "רמת סיכון": parts[3]
+                                        "מנייה": t_cleaned, "תחום/אירוע מאתר": parts,
+                                        "פרטים ונימוק": parts, "רמת סיכון": parts
                                     })
                     if parsed_rows:
                         st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
                         st.session_state.radar_tickers = ticker_extraction
                     else:
-                        st.error("הסוכן הפיק את המחקר אך לא כתב את שורות המניות בצורה התקנית. אנא לחץ שוב על כפתור ההפעלה.")
+                        st.error("הסוכן הפיק את המחקר אך לא כתב את שורות המניות בצורה התקנית. אנא לחץ שוב.")
                 except Exception as e: st.error(f"שגיאה בעיבוד בלוק המניות: {str(e)}")
 if st.session_state.radar_stocks_df is not None and not st.session_state.radar_stocks_df.empty:
     st.success("✅ אותרו המניות הבאות בעלות פוטנציאל מבני מתוך ניתוח המאקרו העולמי:")
