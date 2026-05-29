@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import io
 import time
+import re  # ספרייה לניקוי טקסט מתקדם
 from datetime import datetime
 import pytz
 from google import genai
@@ -100,25 +101,29 @@ if live_data:
 
 st.write("---")
 
-# --- רכיב אוניברסלי מוגן: הפקת גרף ונתונים רק בלחיצה יזומה (פעילות משנית) ---
-def render_universal_stock_analysis(ticker_str):
-    """מציגה כפתור ייעודי ורק בלחיצה עליו מריצה את משיכת הגרף והמדדים הפיננסיים."""
+# --- רכיב אוניברסלי מוגן: פונקציית הפקת גרף ונתונים חסינה הרמטית ---
+def render_universal_stock_analysis(ticker_str, unique_key_prefix=""):
+    """מנקה לחלוטין את הטיקר מכל תו שאינו אות באנגלית ומציגה גרף ומדדים בלחיצה יזומה."""
     if not ticker_str:
         return
     
-    # תיקון הפירוק הסופי: ניקוי מחלט של רווחים, תווים נסתרים, וגרשיים
-    clean_ticker = str(ticker_str).strip().replace("[", "").replace("]", "").replace("'", "").replace('"', '').upper()
+    # 🎯 תיקון רדיקלי: שימוש ב-Regex כדי להשאיר אך ורק אותיות באנגלית נקיות!
+    clean_ticker = re.sub(r'[^a-zA-Z]', '', str(ticker_str)).strip().upper()
     
-    st.markdown(f"##### 📈 אזור פיתוח משני: טעינת גרף ומדדים עבור {clean_ticker}")
+    if not clean_ticker:
+        st.warning("לא זוהה סימול מנייה תקין באנגלית לצורך הפקת הגרף.")
+        return
+        
+    st.markdown(f"##### 📈 טעינת נתוני שוק עבור הסימול הנקי: **{clean_ticker}**")
     
-    if st.button(f"📊 טען נתוני שוק והפק גרף 6M עבור {clean_ticker}", key=f"btn_chart_{clean_ticker}"):
+    if st.button(f"📊 לחץ להצגת גרף 6M ומדדים עבור {clean_ticker}", key=f"btn_chart_{clean_ticker}_{unique_key_prefix}"):
         with st.spinner(f"מושך נתוני מסחר היסטוריים עבור {clean_ticker}..."):
             try:
                 stock = yf.Ticker(clean_ticker)
                 hist = stock.history(period="6m")
                 
                 if hist.empty:
-                    st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול '{clean_ticker}'. ודא שהסימול פעיל בבורסה.")
+                    st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול '{clean_ticker}'. ודא שהסימול פעיל בבורסה (למשל: XOM, INTC, NVDA).")
                     return
                 
                 # 1. ציור הגרף
@@ -153,7 +158,7 @@ def scan_sector_fundamentals(tickers):
     scan_results = []
     for ticker in tickers:
         try:
-            clean_t = str(ticker).strip().upper()
+            clean_t = re.sub(r'[^a-zA-Z]', '', str(ticker)).strip().upper()
             stock = yf.Ticker(clean_t)
             hist = stock.history(period="1y")
             if hist.empty: continue
@@ -171,12 +176,6 @@ def scan_sector_fundamentals(tickers):
             })
         except: continue
     return pd.DataFrame(scan_results)
-
-if "GEMINI_API_KEY" in st.secrets: 
-    api_key = st.secrets["GEMINI_API_KEY"]
-else: 
-    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
-risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 # =====================================================================
 # רכיב א': רדאר אירועים גלובליים (הפקת טבלה נקייה + העמקה משנית)
 # =====================================================================
@@ -220,10 +219,7 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                 try:
                     response = client.models.generate_content(
                         model='gemini-2.5-flash', contents=prompt_catalyst_stable,
-                        config=types.GenerateContentConfig(
-                            temperature=0.3, 
-                            tools=[types.Tool(google_search=types.GoogleSearch())]
-                        )
+                        config=types.GenerateContentConfig(temperature=0.3, tools=[types.Tool(google_search=types.GoogleSearch())])
                     )
                     full_text = response.text
                     break
@@ -240,7 +236,7 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                 st.session_state.radar_full_text = full_text
                 try:
                     if "[DATA_START]" in full_text and "[DATA_END]" in full_text:
-                        data_part = full_text.split("[DATA_START]")[1].split("[DATA_END]")[0].strip()
+                        data_part = full_text.split("[DATA_START]").split("[DATA_END]").strip()
                         lines = data_part.split("\n")
                         parsed_rows = []
                         
@@ -248,14 +244,15 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                             if "|" in line:
                                 parts = [p.strip() for p in line.split("|")]
                                 if len(parts) >= 4:
-                                    # חילוץ נקי של איבר ראשון והסרת רווחים/תווים
-                                    clean_ticker_symbol = str(parts[0]).strip().replace("[", "").replace("]", "").replace("'", "").replace('"', '').upper()
-                                    parsed_rows.append({
-                                        "מנייה": clean_ticker_symbol,
-                                        "תחום/אירוע מאתר": parts[1],
-                                        "פרטים ונימוק": parts[2],
-                                        "רמת סיכון": parts[3]
-                                    })
+                                    # שימוש ב-Regex לטובת ניקוי מחלט של סימול המניה בשלב הפענוח!
+                                    t_cleaned = re.sub(r'[^a-zA-Z]', '', str(parts)).strip().upper()
+                                    if t_cleaned:
+                                        parsed_rows.append({
+                                            "מנייה": t_cleaned,
+                                            "תחום/אירוע מאתר": parts,
+                                            "פרטים ונימוק": parts,
+                                            "רמת סיכון": parts
+                                        })
                         
                         if parsed_rows:
                             st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
@@ -274,18 +271,20 @@ if st.session_state.radar_stocks_df is not None and not st.session_state.radar_s
     st.dataframe(st.session_state.radar_stocks_df, use_container_width=True, hide_index=True)
     
     with st.expander("🌐 לחץ כאן כדי לצפות בדוח מחקר המאקרו המלא שלפיו הופקו המסקנות"):
-        st.markdown(st.session_state.radar_full_text.split("[DATA_START]")[0])
+        st.markdown(st.session_state.radar_full_text.split("[DATA_START]"))
     
-    tickers_list = st.session_state.radar_stocks_df["מנייה"].tolist()
-    radar_choice = st.selectbox("בחר מנייה מהטבלה לצורך הפעלת פעילויות משניות (גרף / דוח מלא):", tickers_list)
+    # 🎯 הוספת תיבת טקסט חופשית חסינה להזנת מנייה לניתוח!
+    st.write("")
+    st.markdown("##### 🔍 חקירת מנייה מהרדאר")
+    radar_choice_input = st.text_input("הקלד את סימול המנייה שברצונך לחקור מהטבלה (למשל: XOM, MP, NVDA):", "XOM").strip().upper()
     
-    render_universal_stock_analysis(radar_choice)
+    # הפעלת רכיב הגרף המשני המוגן והמנוקה מרווחים לחלוטין באמצעות Regex
+    render_universal_stock_analysis(radar_choice_input, unique_key_prefix="radar")
     
     col_r1, col_r2 = st.columns(2)
     if col_r1.button("🌐 הפק דוח אנליסט עמוק ספציפי (Bloomberg & TradingView)", type="primary"):
-        with st.spinner(f"סוכן הרשת חוקר כעת לעומק את {radar_choice}..."):
-            clean_t_deep = str(radar_choice).strip().replace("[", "").replace("]", "").replace("'", "").upper()
-            prompt_deep = f"Generate a full Alpha Convergence Report for {clean_t_deep} (Risk: {risk_profile}). Use Google Search tool to extract insights from site:bloomberg.com and site:tradingview.com. Respond strictly and entirely in Hebrew."
+        with st.spinner(f"סוכן הרשת חוקר כעת לעומק את {radar_choice_input}..."):
+            prompt_deep = f"Generate a full Alpha Convergence Report for {radar_choice_input} (Risk: {risk_profile}). Use Google Search tool to extract insights from site:bloomberg.com and site:tradingview.com. Respond strictly and entirely in Hebrew."
             try:
                 client = genai.Client(api_key=api_key)
                 deep_res = client.models.generate_content(
@@ -296,11 +295,10 @@ if st.session_state.radar_stocks_df is not None and not st.session_state.radar_s
                 st.markdown(deep_res.text)
             except Exception as e: st.error(f"שגיאה בהפקת הדוח: {str(e)}")
             
-    if col_r2.button(f"📌 הוסף את {radar_choice} לרשימת המעקב האישית", key="add_radar_watch"):
-        clean_rc = str(radar_choice).strip().replace("[", "").replace("]", "").replace("'", "").upper()
-        if clean_rc not in st.session_state.watchlist:
-            st.session_state.watchlist.append(clean_rc)
-            st.success(f"המנייה {clean_rc} נוספה בהצלחה למעקב!")
+    if col_r2.button(f"📌 הוסף את {radar_choice_input} לרשימת המעקב האישית", key="add_radar_watch"):
+        if radar_choice_input not in st.session_state.watchlist:
+            st.session_state.watchlist.append(radar_choice_input)
+            st.success(f"המנייה {radar_choice_input} נוספה בהצלחה למעקב!")
 
 st.write("---")
 # =====================================================================
@@ -313,6 +311,12 @@ SECTOR_MAP = {
     "Commodities & Global Shipping": ["VALE", "CAT", "ZIM", "BHP"],
     "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
 }
+
+if "GEMINI_API_KEY" in st.secrets: 
+    api_key = st.secrets["GEMINI_API_KEY"]
+else: 
+    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password", key="sec_api")
+risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"], key="sec_risk")
 
 selected_sector = st.selectbox("בחר ענף שבו תרצה לאתר השקעות ופוטנציאל:", list(SECTOR_MAP.keys()))
 tickers = SECTOR_MAP[selected_sector]
@@ -328,15 +332,17 @@ if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
             st.session_state.all_active_tickers = tickers
 
 if st.session_state.all_active_tickers:
-    chosen_ticker = st.selectbox("בחר מנייה ספציפית מהסורק לטעינת נתונים קשיחים והפקה:", st.session_state.all_active_tickers)
+    st.write("")
+    st.markdown("##### 🔍 חקירת מנייה מהסורק")
+    chosen_ticker_input = st.text_input("הקלד את סימול המנייה שברצונך לחקור מהסורק (למשל: NVDA, TSM):", str(st.session_state.all_active_tickers).upper()).strip().upper()
     
-    render_universal_stock_analysis(chosen_ticker)
+    # הפעלת רכיב הגרף המשני המוגן והמנוקה מרווחים
+    render_universal_stock_analysis(chosen_ticker_input, unique_key_prefix="scanner")
     
     col_s1, col_s2 = st.columns(2)
     if col_s1.button("🌐 הפק דוח עמוק מבוסס רשת (סוכן מלא)", key="deep_sec"):
-        with st.spinner(f"סוכן הרשת יוצא לחקור את {chosen_ticker}..."):
-            clean_ct_deep = str(chosen_ticker).strip().replace("[", "").replace("]", "").replace("'", "").upper()
-            prompt_deep = f"Generate a full Alpha Convergence Report for {clean_ct_deep} (Risk: {risk_profile}). Use Google Search tool to extract insights from site:bloomberg.com, site:tradingview.com, and institutional money flow/13F filings. Respond strictly and entirely in Hebrew."
+        with st.spinner(f"סוכן הרשת יוצא לחקור את {chosen_ticker_input}..."):
+            prompt_deep = f"Generate a full Alpha Convergence Report for {chosen_ticker_input} (Risk: {risk_profile}). Use Google Search tool to extract insights from site:bloomberg.com, site:tradingview.com, and institutional money flow/13F filings. Respond strictly and entirely in Hebrew."
             try:
                 client = genai.Client(api_key=api_key)
                 deep_response = client.models.generate_content(
@@ -347,11 +353,10 @@ if st.session_state.all_active_tickers:
                 st.markdown(deep_response.text)
             except Exception as e: st.error(f"שגיאה בהפקת הדוח המלא: {str(e)}")
             
-    if col_s2.button(f"📌 הוסף את {chosen_ticker} למחברת מעקב ארוך טווח", key="add_scan_watch"):
-        clean_ct = str(chosen_ticker).strip().replace("[", "").replace("]", "").replace("'", "").upper()
-        if clean_ct not in st.session_state.watchlist:
-            st.session_state.watchlist.append(clean_ct)
-            st.success(f"המנייה {clean_ct} נוספה למעקב אשרור ביצועים!")
+    if col_s2.button(f"📌 הוסף את {chosen_ticker_input} למחברת מעקב ארוך טווח", key="add_scan_watch"):
+        if chosen_ticker_input not in st.session_state.watchlist:
+            st.session_state.watchlist.append(chosen_ticker_input)
+            st.success(f"המנייה {chosen_ticker_input} נוספה למעקב אשרור ביצועים!")
 
 # =====================================================================
 # רכיב ג': מחברת מעקב ואשרור ביצועים ארוכי טווח
@@ -368,9 +373,10 @@ else:
     watchlist_df = scan_sector_fundamentals(st.session_state.watchlist)
     st.dataframe(watchlist_df, use_container_width=True, hide_index=True)
     
-    selected_tracked = st.selectbox("בחר מנייה מרשימת המעקב לצפייה בגרף 6M עדכני:", st.session_state.watchlist, key="select_tracked_stock")
+    watchlist_choice_input = st.text_input("הקלד את סימול המנייה מרשימת המעקב לצפייה בגרף 6M עדכני:", str(st.session_state.watchlist).upper()).strip().upper()
     
-    render_universal_stock_analysis(selected_tracked)
+    # הפעלת רכיב הגרף המשני המוגן והמנוקה מרווחים באמצעות Regex
+    render_universal_stock_analysis(watchlist_choice_input, unique_key_prefix="watchlist")
     
     if st.button("🗑️ נקה את כל רשימת המעקב"):
         st.session_state.watchlist = []
