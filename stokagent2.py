@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 import io
-import json
 from datetime import datetime
 import pytz
 from google import genai
@@ -171,7 +170,7 @@ else:
     api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password")
 risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 # =====================================================================
-# רכיב א': רדאר אירועים גלובליים (הפקת טבלה מובנית)
+# רכיב א': רדאר אירועים גלובליים (הפקת טבלה מובנית חסינת חסימות)
 # =====================================================================
 st.header("🛰️ רדאר אירועים וטרנדים גלובליים (Macro Catalyst Radar)")
 st.markdown("סריקה אקטיבית המפיקה טבלת מניות פוטנציאליות קונקרטית, ללא דוחות כבדים מראש.")
@@ -180,56 +179,69 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
     if not api_key: 
         st.warning("אנא הזן מפתח API בתפריט הצד.")
     else:
-        with st.spinner("הסוכן סורק ומחלץ מניות פוטנציאליות במבנה נתונים קשיח..."):
-            prompt_catalyst_json = """
+        with st.spinner("הסוכן סורק את הרשת ומחלץ מניות פוטנציאליות..."):
+            # שינוי הפרומפט למבנה CSV/טקסט מופרד כדי לעקוף את מגבלת ה-JSON והחיפוש
+            prompt_catalyst_stable = """
             You are a global macro-economic asset scanner. Scan the live web using Google Search 
-            to find major breaking events (subsidies, trade constraints, energy spikes) from the last few weeks.
+            to find major breaking economic, geopolitical, or subsidy events from the last few weeks.
             Based on these events, identify exactly 4 publicly traded stocks that have massive upcoming structural potential.
             
-            You MUST return ONLY a valid JSON array of objects. Do not write any markdown wrappers, no backticks, no introduction. Just the raw JSON.
-            Each object must contain exactly these 4 keys in Hebrew:
-            "מנייה": (The exact stock ticker, e.g. "NVDA"),
-            "תחום/אירוע מאתר": (Short description of the catalyst event or sector),
-            "פרטים ונימוק": (A 1-sentence reason why this stock gains potential),
-            "רמת סיכון": ("High", "Medium", or "Low")
+            You MUST return the output precisely as a plain text block where each line represents a stock, formatted EXACTLY like this:
+            TICKER | CATALYST_SECTOR | REASON_SENTENCE | RISK_LEVEL
             
-            Example Format:
-            [{"מנייה": "XOM", "תחום/אירוע מאתר": "אנרגיה גיאופוליטית", "פרטים ונימוק": "זינוק מחירי הנפט בעקבות מתח במפרץ.", "רמת סיכון": "Medium"}]
+            Rules:
+            - Provide exactly 4 rows.
+            - Do not include any headers, backticks, introduction, or markdown styling.
+            - Write the values for CATALYST_SECTOR and REASON_SENTENCE strictly in Hebrew.
+            - RISK_LEVEL should be either Low, Medium, or High.
+            
+            Example of exactly how the text should look:
+            XOM | אנרגיה וגיאופוליטיקה | זינוק מחירי הנפט עקב מתחים במפרץ הפרסי. | Medium
+            NVDA | טכנולוגיה ושבבים | ביקוש שיא לחומרת בינה מלאכותית וסובסידיות חדשות. | High
             """
             try:
                 client = genai.Client(api_key=api_key)
+                # קריאה נקייה ללא כבילת ה-MimeType ל-JSON
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash', contents=prompt_catalyst_json,
+                    model='gemini-2.5-flash', contents=prompt_catalyst_stable,
                     config=types.GenerateContentConfig(
-                        temperature=0.2, 
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                        response_mime_type="application/json"
+                        temperature=0.3, 
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
                     )
                 )
                 
-                # עיבוד וניקוי הפלט לטובת המרה ישירה לטבלת נתונים
-                raw_json = response.text.strip()
-                if raw_json.startswith("```json"): 
-                    raw_json = raw_json.replace("```json", "").replace("```", "").strip()
+                # מנגנון עיבוד הטקסט המקומי והפיכתו לטבלה דינמית
+                lines = response.text.strip().split("\n")
+                parsed_rows = []
                 
-                parsed_data = json.loads(raw_json)
-                st.session_state.radar_stocks_df = pd.DataFrame(parsed_data)
+                for line in lines:
+                    if "|" in line:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) >= 4:
+                            parsed_rows.append({
+                                "מנייה": parts[0],
+                                "תחום/אירוע מאתר": parts[1],
+                                "פרטים ונימוק": parts[2],
+                                "רמת סיכון": parts[3]
+                            })
                 
+                if parsed_rows:
+                    st.session_state.radar_stocks_df = pd.DataFrame(parsed_rows)
+                else:
+                    st.error("המודל החזיר פלט במבנה לא צפוי. אנא נסה ללחוץ שוב.")
+                    
             except Exception as e: 
-                st.error(f"שגיאה בהפקת טבלת הרדאר המובנית: {str(e)}")
+                st.error(f"שגיאה בתהליך עיבוד נתוני הרדאר: {str(e)}")
 
-# הצגת טבלת הרדאר במידה ונוצרה
-if st.session_state.radar_stocks_df is not None:
+# הצגת טבלת הרדאר במידה ונוצרה בהצלחה
+if st.session_state.radar_stocks_df is not None and not st.session_state.radar_stocks_df.empty:
     st.success("✅ אותרו המניות הבאות בעלות פוטנציאל מבני:")
     st.dataframe(st.session_state.radar_stocks_df, use_container_width=True, hide_index=True)
     
-    # חילוץ שמות הסימולים לטובת ממשק המשתמש
     tickers_list = st.session_state.radar_stocks_df["מנייה"].tolist()
-    
-    # בחירת מניה לצורך פתיחת גרף והפקת דוח
     radar_choice = st.selectbox("בחר מנייה מהטבלה כדי לפתוח גרף 6M ולהפיק דוח מלא:", tickers_list)
     
-    # הצגה אוטומטית של הגרף המקומי והנתונים
+    # הפעלת רכיב הגרף והפרטים האוטומטי
     render_universal_stock_analysis(radar_choice)
     
     col_r1, col_r2 = st.columns(2)
@@ -246,7 +258,6 @@ if st.session_state.radar_stocks_df is not None:
                 st.markdown(deep_res.text)
             except Exception as e: st.error(f"שגיאה בהפקת הדוח: {str(e)}")
             
-    # כפתור שמירה לרשימת מעקב ארוכת טווח
     if col_r2.button(f"📌 הוסף את {radar_choice} לרשימת המעקב האישית"):
         if radar_choice not in st.session_state.watchlist:
             st.session_state.watchlist.append(radar_choice)
@@ -315,7 +326,6 @@ if not st.session_state.watchlist:
 else:
     st.success(f"מעקב פעיל אחר {len(st.session_state.watchlist)} מניות שנבחרו על ידך:")
     
-    # חישוב והצגת טבלה מעודכנת בזמן אמת עבור כל המניות שנשמרו במעקב
     watchlist_df = scan_sector_fundamentals(st.session_state.watchlist)
     st.dataframe(watchlist_df, use_container_width=True, hide_index=True)
     
