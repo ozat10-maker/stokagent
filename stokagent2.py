@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import io
 import time
-import re  # ספרייה לניקוי טקסט מתקדם
+import re
 from datetime import datetime
 import pytz
 from google import genai
@@ -12,6 +12,19 @@ from google.genai import types
 
 # הגדרת תצורת דף רחב למערכת
 st.set_page_config(page_title="Macro AI Terminal", layout="wide")
+
+# =====================================================================
+# 🎯 תיקון קריטי: הגדרת מפתח ה-API והסיכון בראש הדף (גלובלי)
+# =====================================================================
+st.sidebar.header("⚙️ הגדרות מערכת וסיכון")
+
+if "GEMINI_API_KEY" in st.secrets: 
+    api_key = st.secrets["GEMINI_API_KEY"]
+    st.sidebar.success("מפתח API נטען אוטומטית ✅")
+else: 
+    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password", key="global_api_key")
+
+risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"])
 
 # --- אתחול משתני State גלובליים לשמירת נתונים ---
 if "watchlist" not in st.session_state:
@@ -25,7 +38,7 @@ if "all_active_tickers" not in st.session_state:
 if "custom_dashboard_indices" not in st.session_state:
     st.session_state.custom_dashboard_indices = ["S&P 500", "Nasdaq 100", "תל אביב 35"]
 
-# --- חלק 1: שעונים עולמיים ודאשבורד מדדים עליון ---
+# --- שעונים עולמיים ודאשבורד מדדים עליון ---
 st.markdown("### 🌐 דאשבורד מאקרו וזמני מסחר עולמיים")
 
 # חישוב זמנים לפי אזורי זמן בעולם
@@ -56,7 +69,7 @@ ALL_AVAILABLE_INDICES = {
 }
 
 # אפשרות להתאמה אישית של הדאשבורד מתפריט הצד
-st.sidebar.header("🔧 התאמת דאשבורד ראשי")
+st.sidebar.markdown("---")
 selected_dashboard_metrics = st.sidebar.multiselect(
     "בחר מדדים ומטבעות להצגה קבועה עליונה:",
     list(ALL_AVAILABLE_INDICES.keys()),
@@ -100,14 +113,13 @@ if live_data:
             cols[i].metric(label=name, value="N/A")
 
 st.write("---")
-
 # --- רכיב אוניברסלי מוגן: פונקציית הפקת גרף ונתונים חסינה הרמטית ---
 def render_universal_stock_analysis(ticker_str, unique_key_prefix=""):
     """מנקה לחלוטין את הטיקר מכל תו שאינו אות באנגלית ומציגה גרף ומדדים בלחיצה יזומה."""
     if not ticker_str:
         return
     
-    # 🎯 תיקון רדיקלי: שימוש ב-Regex כדי להשאיר אך ורק אותיות באנגלית נקיות!
+    # ניקוי קשיח באמצעות Regex - משאיר רק אותיות נקיות
     clean_ticker = re.sub(r'[^a-zA-Z]', '', str(ticker_str)).strip().upper()
     
     if not clean_ticker:
@@ -123,7 +135,7 @@ def render_universal_stock_analysis(ticker_str, unique_key_prefix=""):
                 hist = stock.history(period="6m")
                 
                 if hist.empty:
-                    st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול '{clean_ticker}'. ודא שהסימול פעיל בבורסה (למשל: XOM, INTC, NVDA).")
+                    st.error(f"❌ לא ניתן היה למשוך היסטוריית מחירים עבור הסימול '{clean_ticker}'. ודא שהסימול פעיל בבורסה.")
                     return
                 
                 # 1. ציור הגרף
@@ -176,6 +188,7 @@ def scan_sector_fundamentals(tickers):
             })
         except: continue
     return pd.DataFrame(scan_results)
+
 # =====================================================================
 # רכיב א': רדאר אירועים גלובליים (הפקת טבלה נקייה + העמקה משנית)
 # =====================================================================
@@ -236,7 +249,7 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                 st.session_state.radar_full_text = full_text
                 try:
                     if "[DATA_START]" in full_text and "[DATA_END]" in full_text:
-                        data_part = full_text.split("[DATA_START]").split("[DATA_END]").strip()
+                        data_part = full_text.split("[DATA_START]")[1].split("[DATA_END]")[0].strip()
                         lines = data_part.split("\n")
                         parsed_rows = []
                         
@@ -244,14 +257,13 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                             if "|" in line:
                                 parts = [p.strip() for p in line.split("|")]
                                 if len(parts) >= 4:
-                                    # שימוש ב-Regex לטובת ניקוי מחלט של סימול המניה בשלב הפענוח!
-                                    t_cleaned = re.sub(r'[^a-zA-Z]', '', str(parts)).strip().upper()
+                                    t_cleaned = re.sub(r'[^a-zA-Z]', '', str(parts[0])).strip().upper()
                                     if t_cleaned:
                                         parsed_rows.append({
                                             "מנייה": t_cleaned,
-                                            "תחום/אירוע מאתר": parts,
-                                            "פרטים ונימוק": parts,
-                                            "רמת סיכון": parts
+                                            "תחום/אירוע מאתר": parts[1],
+                                            "פרטים ונימוק": parts[2],
+                                            "רמת סיכון": parts[3]
                                         })
                         
                         if parsed_rows:
@@ -264,21 +276,20 @@ if st.button("🚀 הפעל רדאר לאיתור מניות פוטנציאלי�
                     st.error(f"שגיאה בעיבוד הטקסט: {str(parse_err)}")
             else:
                 st.error("❌ השרת עמוס מדי כעת ולא הצליח להשלים את החיפוש.")
-
 # הצגת ממצאי הרדאר במידה וקיימים בזיכרון
 if st.session_state.radar_stocks_df is not None and not st.session_state.radar_stocks_df.empty:
     st.success("✅ אותרו המניות הבאות בעלות פוטנציאל מבני מתוך ניתוח המאקרו העולמי:")
     st.dataframe(st.session_state.radar_stocks_df, use_container_width=True, hide_index=True)
     
     with st.expander("🌐 לחץ כאן כדי לצפות בדוח מחקר המאקרו המלא שלפיו הופקו המסקנות"):
-        st.markdown(st.session_state.radar_full_text.split("[DATA_START]"))
+        st.markdown(st.session_state.radar_full_text.split("[DATA_START]")[0])
     
-    # 🎯 הוספת תיבת טקסט חופשית חסינה להזנת מנייה לניתוח!
+    tickers_list = st.session_state.radar_stocks_df["מנייה"].tolist()
+    
     st.write("")
     st.markdown("##### 🔍 חקירת מנייה מהרדאר")
-    radar_choice_input = st.text_input("הקלד את סימול המנייה שברצונך לחקור מהטבלה (למשל: XOM, MP, NVDA):", "XOM").strip().upper()
+    radar_choice_input = st.text_input("הקלד את סימול המנייה שברצונך לחקור מהטבלה (למשל: XOM, MP, NVDA):", value=str(tickers_list[0]) if tickers_list else "XOM").strip().upper()
     
-    # הפעלת רכיב הגרף המשני המוגן והמנוקה מרווחים לחלוטין באמצעות Regex
     render_universal_stock_analysis(radar_choice_input, unique_key_prefix="radar")
     
     col_r1, col_r2 = st.columns(2)
@@ -301,6 +312,7 @@ if st.session_state.radar_stocks_df is not None and not st.session_state.radar_s
             st.success(f"המנייה {radar_choice_input} נוספה בהצלחה למעקב!")
 
 st.write("---")
+
 # =====================================================================
 # רכיב ב': סורק מניות ענפי (Bottom-Up Model)
 # =====================================================================
@@ -311,12 +323,6 @@ SECTOR_MAP = {
     "Commodities & Global Shipping": ["VALE", "CAT", "ZIM", "BHP"],
     "Biotech & Healthcare": ["LLY", "NVO", "PFE", "MRK"]
 }
-
-if "GEMINI_API_KEY" in st.secrets: 
-    api_key = st.secrets["GEMINI_API_KEY"]
-else: 
-    api_key = st.sidebar.text_input("הזן מפתח API של Gemini:", type="password", key="sec_api")
-risk_profile = st.sidebar.selectbox("פרופיל סיכון יעד:", ["Conservative", "Moderate", "Aggressive"], key="sec_risk")
 
 selected_sector = st.selectbox("בחר ענף שבו תרצה לאתר השקעות ופוטנציאל:", list(SECTOR_MAP.keys()))
 tickers = SECTOR_MAP[selected_sector]
@@ -334,9 +340,8 @@ if st.button("🔍 הפעל סורק ענפי מהיר", type="primary"):
 if st.session_state.all_active_tickers:
     st.write("")
     st.markdown("##### 🔍 חקירת מנייה מהסורק")
-    chosen_ticker_input = st.text_input("הקלד את סימול המנייה שברצונך לחקור מהסורק (למשל: NVDA, TSM):", str(st.session_state.all_active_tickers).upper()).strip().upper()
+    chosen_ticker_input = st.text_input("הקלד את סימול המנייה שברצונך לחקור מהסורק (למשל: NVDA, TSM):", value=str(st.session_state.all_active_tickers[0])).strip().upper()
     
-    # הפעלת רכיב הגרף המשני המוגן והמנוקה מרווחים
     render_universal_stock_analysis(chosen_ticker_input, unique_key_prefix="scanner")
     
     col_s1, col_s2 = st.columns(2)
@@ -373,9 +378,8 @@ else:
     watchlist_df = scan_sector_fundamentals(st.session_state.watchlist)
     st.dataframe(watchlist_df, use_container_width=True, hide_index=True)
     
-    watchlist_choice_input = st.text_input("הקלד את סימול המנייה מרשימת המעקב לצפייה בגרף 6M עדכני:", str(st.session_state.watchlist).upper()).strip().upper()
+    watchlist_choice_input = st.text_input("הקלד את סימול המנייה מרשימת המעקב לצפייה בגרף 6M עדכני:", value=str(st.session_state.watchlist[0])).strip().upper()
     
-    # הפעלת רכיב הגרף המשני המוגן והמנוקה מרווחים באמצעות Regex
     render_universal_stock_analysis(watchlist_choice_input, unique_key_prefix="watchlist")
     
     if st.button("🗑️ נקה את כל רשימת המעקב"):
